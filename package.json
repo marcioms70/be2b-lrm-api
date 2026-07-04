@@ -2,11 +2,11 @@
   "name": "be2b-lrm-api",
   "version": "1.0.0",
   "description": "API intermediária do módulo BDR/LRM Tráfego Pago",
-  "main": "src/server.js",
+  "main": "src/bootstrap.js",
   "type": "module",
   "scripts": {
-    "start": "node --import ./src/mediaUploadPatch.js src/server.js",
-    "dev": "node --watch --import ./src/mediaUploadPatch.js src/server.js"
+    "start": "node src/bootstrap.js",
+    "dev": "node --watch src/bootstrap.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
