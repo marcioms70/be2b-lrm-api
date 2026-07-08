@@ -129,11 +129,12 @@ async function createMetaObjects({ campaign, connection, accessToken, status }) 
   const adAccountPath = `/${connection.ad_account_id}`;
 
   const metaCampaign = await graphPost(`${adAccountPath}/campaigns`, accessToken, {
-    name: baseName,
-    objective: "OUTCOME_TRAFFIC",
-    status,
-    special_ad_categories: []
-  });
+  name: baseName,
+  objective: "OUTCOME_TRAFFIC",
+  status,
+  special_ad_categories: [],
+  is_adset_budget_sharing_enabled: false
+});
 
   const adSet = await graphPost(`${adAccountPath}/adsets`, accessToken, {
     name: `${baseName} - Conjunto`,
