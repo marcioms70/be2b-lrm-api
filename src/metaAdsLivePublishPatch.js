@@ -10,7 +10,7 @@ function fail(res, status, message, details = null) {
   return res.status(status).json({
     success: false,
     message,
-    details: process.env.NODE_ENV === "production" ? undefined : details
+    details
   });
 }
 
