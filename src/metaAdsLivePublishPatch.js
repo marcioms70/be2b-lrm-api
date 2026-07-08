@@ -7,11 +7,7 @@ function ok(res, data = {}) {
 }
 
 function fail(res, status, message, details = null) {
-  return res.status(status).json({
-    success: false,
-    message,
-    details
-  });
+  return res.status(status).json({ success: false, message, details });
 }
 
 function getOrganizationId(req) {
@@ -82,7 +78,9 @@ async function graphPost(pathname, accessToken, payload = {}) {
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body?.error?.message || `Erro Meta Graph API: HTTP ${response.status}`);
+    const err = new Error(body?.error?.message || `Erro Meta Graph API: HTTP ${response.status}`);
+    err.meta = { path: pathname, status: response.status, response: body, payload };
+    throw err;
   }
   return body;
 }
@@ -180,12 +178,7 @@ async function createMetaObjects({ campaign, connection, accessToken, status }) 
     meta_creative_id: creative.id,
     meta_ad_id: ad.id,
     requested_status: status,
-    meta: {
-      campaign: metaCampaign,
-      adset: adSet,
-      creative,
-      ad
-    }
+    meta: { campaign: metaCampaign, adset: adSet, creative, ad }
   };
 }
 
@@ -205,34 +198,16 @@ async function handleLivePublish(req, res) {
     const connection = await getConnection(organizationId);
     const missing = validateReady(campaign, connection);
 
-    if (missing.length > 0) {
-      return fail(res, 400, "Configuração incompleta para publicar na Meta Ads.", { missing });
-    }
+    if (missing.length > 0) return fail(res, 400, "Configuração incompleta para publicar na Meta Ads.", { missing });
 
     const job = await query(
-      `
-      insert into public.meta_ads_publish_jobs (
-        organization_id, campaign_id, connection_id, status, request_payload, started_at
-      ) values ($1, $2, $3, 'running', $4::jsonb, now())
-      returning *
-      `,
+      `insert into public.meta_ads_publish_jobs (organization_id, campaign_id, connection_id, status, request_payload, started_at) values ($1, $2, $3, 'running', $4::jsonb, now()) returning *`,
       [organizationId, campaignId, connection.id, JSON.stringify({ mode: "live", activate: req.body?.activate === true })]
     );
     jobId = job.rows[0].id;
 
     await query(
-      `
-      insert into public.meta_ads_campaign_publications (
-        organization_id, campaign_id, connection_id, publish_job_id, status, raw_response, updated_at
-      ) values ($1, $2, $3, $4, 'publishing', $5::jsonb, now())
-      on conflict (organization_id, campaign_id) do update set
-        connection_id = excluded.connection_id,
-        publish_job_id = excluded.publish_job_id,
-        status = 'publishing',
-        last_error = null,
-        raw_response = excluded.raw_response,
-        updated_at = now()
-      `,
+      `insert into public.meta_ads_campaign_publications (organization_id, campaign_id, connection_id, publish_job_id, status, raw_response, updated_at) values ($1, $2, $3, $4, 'publishing', $5::jsonb, now()) on conflict (organization_id, campaign_id) do update set connection_id = excluded.connection_id, publish_job_id = excluded.publish_job_id, status = 'publishing', last_error = null, raw_response = excluded.raw_response, updated_at = now()`,
       [organizationId, campaignId, connection.id, jobId, JSON.stringify({ mode: "live", started_at: new Date().toISOString() })]
     );
 
@@ -242,46 +217,17 @@ async function handleLivePublish(req, res) {
     const publicationStatus = status === "ACTIVE" ? "published" : "paused";
 
     await query(
-      `
-      update public.meta_ads_publish_jobs
-      set status = 'success', response_payload = $1::jsonb, finished_at = now(), updated_at = now()
-      where id = $2
-      `,
+      `update public.meta_ads_publish_jobs set status = 'success', response_payload = $1::jsonb, finished_at = now(), updated_at = now() where id = $2`,
       [JSON.stringify(result), jobId]
     );
 
     const publication = await query(
-      `
-      update public.meta_ads_campaign_publications
-      set
-        meta_campaign_id = $1,
-        meta_adset_id = $2,
-        meta_creative_id = $3,
-        meta_ad_id = $4,
-        status = $5,
-        published_at = coalesce(published_at, now()),
-        raw_response = $6::jsonb,
-        last_error = null,
-        updated_at = now()
-      where organization_id = $7 and campaign_id = $8
-      returning *
-      `,
-      [
-        result.meta_campaign_id,
-        result.meta_adset_id,
-        result.meta_creative_id,
-        result.meta_ad_id,
-        publicationStatus,
-        JSON.stringify(result),
-        organizationId,
-        campaignId
-      ]
+      `update public.meta_ads_campaign_publications set meta_campaign_id = $1, meta_adset_id = $2, meta_creative_id = $3, meta_ad_id = $4, status = $5, published_at = coalesce(published_at, now()), raw_response = $6::jsonb, last_error = null, updated_at = now() where organization_id = $7 and campaign_id = $8 returning *`,
+      [result.meta_campaign_id, result.meta_adset_id, result.meta_creative_id, result.meta_ad_id, publicationStatus, JSON.stringify(result), organizationId, campaignId]
     );
 
     return ok(res, {
-      message: status === "ACTIVE"
-        ? "Campanha publicada na Meta Ads com status ACTIVE."
-        : "Campanha criada na Meta Ads em PAUSED, sem ativar gasto.",
+      message: status === "ACTIVE" ? "Campanha publicada na Meta Ads com status ACTIVE." : "Campanha criada na Meta Ads em PAUSED, sem ativar gasto.",
       data: {
         campaign_id: campaignId,
         publish_job_id: jobId,
@@ -296,25 +242,23 @@ async function handleLivePublish(req, res) {
       }
     });
   } catch (error) {
+    const errorDetails = { message: error.message, meta: error.meta || null };
+
     if (jobId) {
       await query(
-        `update public.meta_ads_publish_jobs set status = 'error', error_message = $1, finished_at = now(), updated_at = now() where id = $2`,
-        [error.message, jobId]
+        `update public.meta_ads_publish_jobs set status = 'error', error_message = $1, response_payload = $2::jsonb, finished_at = now(), updated_at = now() where id = $3`,
+        [error.message, JSON.stringify(errorDetails), jobId]
       ).catch(() => null);
     }
 
     if (organizationId && campaignId) {
       await query(
-        `
-        update public.meta_ads_campaign_publications
-        set status = 'failed', last_error = $1, updated_at = now()
-        where organization_id = $2 and campaign_id = $3
-        `,
-        [error.message, organizationId, campaignId]
+        `update public.meta_ads_campaign_publications set status = 'failed', last_error = $1, raw_response = $2::jsonb, updated_at = now() where organization_id = $3 and campaign_id = $4`,
+        [error.message, JSON.stringify(errorDetails), organizationId, campaignId]
       ).catch(() => null);
     }
 
-    return fail(res, 500, "Não foi possível publicar a campanha real na Meta Ads.", error.message);
+    return fail(res, 500, "Não foi possível publicar a campanha real na Meta Ads.", errorDetails);
   }
 }
 
@@ -332,19 +276,12 @@ function registerMetaAdsLiveRoutes(app) {
   const addedLayers = stack.slice(stackBefore);
   const fallbackIndex = Math.max(previousLayers.length - 1, 0);
 
-  stack.splice(
-    0,
-    stack.length,
-    ...previousLayers.slice(0, fallbackIndex),
-    ...addedLayers,
-    ...previousLayers.slice(fallbackIndex)
-  );
+  stack.splice(0, stack.length, ...previousLayers.slice(0, fallbackIndex), ...addedLayers, ...previousLayers.slice(fallbackIndex));
 }
 
 if (!express.application.__be2bMetaAdsLivePatched) {
   express.application.__be2bMetaAdsLivePatched = true;
   const originalListen = express.application.listen;
-
   express.application.listen = function patchedListen(...args) {
     registerMetaAdsLiveRoutes(this);
     return originalListen.apply(this, args);
