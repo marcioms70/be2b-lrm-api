@@ -342,6 +342,9 @@ const brandKitUpdatableFields = [
   "target_audience",
   "default_cta",
   "default_whatsapp",
+  "required_elements",
+  "forbidden_elements",
+  "reference_image_urls",
   "generation_instructions",
   "extra_config"
 ];
