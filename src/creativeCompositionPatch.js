@@ -163,9 +163,14 @@ function buildOverlaySvg({ width, height, headline, cta, brandKit, overlayConfig
 async function prepareLogo(logoBuffer, overlayConfig) {
   const maxWidth = Math.max(Number(overlayConfig?.logo?.max_width) || 300, 300);
   const maxHeight = Math.max(Number(overlayConfig?.logo?.max_height) || 120, 80);
+  const metadata = await sharp(logoBuffer).metadata();
+  const pipeline = sharp(logoBuffer);
 
-  return sharp(logoBuffer)
-    .trim({ background: { r: 0, g: 0, b: 0 }, threshold: 14 })
+  if (!metadata.hasAlpha) {
+    pipeline.trim({ background: { r: 0, g: 0, b: 0 }, threshold: 14 });
+  }
+
+  return pipeline
     .resize({ width: maxWidth, height: maxHeight, fit: "inside", withoutEnlargement: true })
     .png()
     .toBuffer();
