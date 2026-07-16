@@ -249,7 +249,7 @@ async function handleComposeCreative(req, res) {
     const finalBuffer = await sharp(rawImage)
       .resize({ width, height, fit: "cover", position: "centre" })
       .composite([
-        { input: logo, left: logoLeft, top: logoTop, blend: "screen" },
+        { input: logo, left: logoLeft, top: logoTop, blend: "over" },
         { input: overlay, left: 0, top: 0, blend: "over" }
       ])
       .png({ compressionLevel: 8 })
