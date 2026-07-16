@@ -373,13 +373,155 @@ async function handleUpdateBrandKit(req, res) {
   }
 }
 
+async function handleGetBrandKit(req, res) {
+  try {
+    const organizationId = getOrganizationId(req);
+    if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+
+    const result = await query(
+      `select * from public.brand_kits
+       where organization_id = $1 and is_active = true
+       order by is_default desc, updated_at desc
+       limit 1`,
+      [organizationId]
+    );
+
+    if (!result.rowCount) return fail(res, 404, "Kit de marca ativo não encontrado.");
+    return ok(res, { data: result.rows[0] });
+  } catch (error) {
+    return fail(res, 500, "Não foi possível carregar o kit de marca.", error.message);
+  }
+}
+
+async function handleListCreatives(req, res) {
+  try {
+    const organizationId = getOrganizationId(req);
+    if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+
+    const result = await query(
+      `select gc.*
+       from public.generated_creatives gc
+       where gc.campaign_id = $1 and gc.organization_id = $2
+       order by gc.created_at desc, gc.variant_number asc`,
+      [req.params.campaignId, organizationId]
+    );
+
+    return ok(res, { data: result.rows });
+  } catch (error) {
+    return fail(res, 500, "Não foi possível carregar os criativos gerados.", error.message);
+  }
+}
+
+async function handleApproveCreative(req, res) {
+  const client = await pool.connect();
+  try {
+    const organizationId = getOrganizationId(req);
+    if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+
+    await client.query("begin");
+    const current = await client.query(
+      `select * from public.generated_creatives
+       where id = $1 and organization_id = $2
+       limit 1`,
+      [req.params.id, organizationId]
+    );
+
+    if (!current.rowCount) {
+      await client.query("rollback");
+      return fail(res, 404, "Criativo não encontrado.");
+    }
+
+    const creative = current.rows[0];
+    if (!creative.final_image_url) {
+      await client.query("rollback");
+      return fail(res, 400, "O criativo ainda não possui composição final.");
+    }
+
+    await client.query(
+      `update public.generated_creatives
+       set is_selected = false,
+           status = case when status = 'approved' then 'generated' else status end,
+           updated_at = now()
+       where campaign_id = $1 and organization_id = $2`,
+      [creative.campaign_id, organizationId]
+    );
+
+    await client.query(
+      `update public.paid_traffic_media
+       set is_primary = false, updated_at = now()
+       where campaign_id = $1 and organization_id = $2`,
+      [creative.campaign_id, organizationId]
+    );
+
+    const approved = await client.query(
+      `update public.generated_creatives
+       set status = 'approved', is_selected = true,
+           metadata = coalesce(metadata, '{}'::jsonb) || $1::jsonb,
+           updated_at = now()
+       where id = $2 and organization_id = $3
+       returning *`,
+      [JSON.stringify({ approved_at: new Date().toISOString() }), creative.id, organizationId]
+    );
+
+    if (creative.media_id) {
+      await client.query(
+        `update public.paid_traffic_media
+         set is_primary = true, updated_at = now()
+         where id = $1 and organization_id = $2`,
+        [creative.media_id, organizationId]
+      );
+    }
+
+    await client.query("commit");
+    return ok(res, { message: "Criativo aprovado e marcado como principal.", data: approved.rows[0] });
+  } catch (error) {
+    await client.query("rollback").catch(() => null);
+    return fail(res, 500, "Não foi possível aprovar o criativo.", error.message);
+  } finally {
+    client.release();
+  }
+}
+
+async function handleRejectCreative(req, res) {
+  try {
+    const organizationId = getOrganizationId(req);
+    if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+
+    const result = await query(
+      `update public.generated_creatives
+       set status = 'rejected', is_selected = false,
+           metadata = coalesce(metadata, '{}'::jsonb) || $1::jsonb,
+           updated_at = now()
+       where id = $2 and organization_id = $3
+       returning *`,
+      [
+        JSON.stringify({
+          rejected_at: new Date().toISOString(),
+          rejection_reason: req.body?.reason || null
+        }),
+        req.params.id,
+        organizationId
+      ]
+    );
+
+    if (!result.rowCount) return fail(res, 404, "Criativo não encontrado.");
+    return ok(res, { message: "Criativo rejeitado.", data: result.rows[0] });
+  } catch (error) {
+    return fail(res, 500, "Não foi possível rejeitar o criativo.", error.message);
+  }
+}
+
 function registerCreativeCompositionRoutes(app) {
   if (app.__be2bCreativeCompositionRegistered) return;
   app.__be2bCreativeCompositionRegistered = true;
 
   const stackBefore = app._router?.stack?.length || 0;
+  app.get("/api/creative/brand-kit", handleGetBrandKit);
   app.post("/api/creative/compose", handleComposeCreative);
   app.patch("/api/creative/brand-kits/:id", handleUpdateBrandKit);
+  app.get("/api/creative/campaigns/:campaignId/creatives", handleListCreatives);
+  app.post("/api/creative/:id/approve", handleApproveCreative);
+  app.post("/api/creative/:id/reject", handleRejectCreative);
 
   const stack = app._router?.stack;
   if (!stack || stack.length <= stackBefore) return;
