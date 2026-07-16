@@ -396,6 +396,107 @@ async function handleGetBrandKit(req, res) {
   }
 }
 
+async function handleInitializeBrandKit(req, res) {
+  const client = await pool.connect();
+
+  try {
+    const organizationId = getOrganizationId(req);
+    if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+
+    await client.query("begin");
+
+    let brandKitResult = await client.query(
+      `select * from public.brand_kits
+       where organization_id = $1 and is_active = true
+       order by is_default desc, updated_at desc
+       limit 1
+       for update`,
+      [organizationId]
+    );
+
+    if (!brandKitResult.rowCount) {
+      brandKitResult = await client.query(
+        `insert into public.brand_kits (
+           organization_id, name, primary_color, secondary_color, accent_color,
+           font_family, brand_voice, visual_style, default_cta,
+           required_elements, forbidden_elements, generation_instructions,
+           extra_config, is_default, is_active
+         ) values (
+           $1, 'Kit de Marca Padrão', '#081A4B', '#008CFF', '#00C8FF',
+           'Inter',
+           'Profissional, clara, confiável, objetiva e orientada a resultados.',
+           'Visual moderno, profissional, limpo, com alto contraste e composição orientada à conversão.',
+           'SAIBA_MAIS',
+           array[
+             'Usar o logotipo oficial fornecido pelo cliente na composição final',
+             'Manter alto contraste e leitura fácil em telas pequenas',
+             'Reservar área segura para headline e CTA'
+           ]::text[],
+           array[
+             'Não redesenhar ou deformar o logotipo',
+             'Não inserir texto dentro da imagem gerada pela IA',
+             'Não criar promessas ou resultados não comprovados',
+             'Não usar marcas de terceiros sem autorização'
+           ]::text[],
+           'Gerar somente a imagem-base, sem texto, sem logotipo e sem CTA. Criar uma composição publicitária profissional com área visual limpa para aplicação posterior dos elementos da marca.',
+           '{"default_variants":3,"default_quality":"medium","default_model":"gpt-image-2","human_approval_required":true,"publish_paused_by_default":true}'::jsonb,
+           true, true
+         )
+         on conflict (organization_id, name)
+         do update set
+           is_default = true,
+           is_active = true,
+           updated_at = now()
+         returning *`,
+        [organizationId]
+      );
+    }
+
+    const brandKit = brandKitResult.rows[0];
+    const templateResult = await client.query(
+      `insert into public.creative_templates (
+         organization_id, brand_kit_id, name, template_type, placement,
+         aspect_ratio, width, height, prompt_template, overlay_config,
+         is_default, is_active
+       ) values (
+         $1, $2, 'Meta Feed Quadrado 1:1', 'social_ad', 'meta_feed',
+         '1:1', 1080, 1080,
+         'Crie uma imagem-base publicitária profissional para {{product_service}}, voltada a {{target_audience}}. Objetivo da campanha: {{objective}}. Conceito visual: {{creative_notes}}. Use o estilo da marca: {{visual_style}}. Não coloque palavras, letras, logotipos, botões ou marcas d''água. Reserve áreas limpas para aplicação posterior da headline, do logotipo e do CTA.',
+         '{
+           "canvas":{"width":1080,"height":1080,"background":"#081A4B","safe_margin":64},
+           "overlay":{"enabled":true,"type":"bottom_gradient","from":"transparent","to":"rgba(8,26,75,0.94)","height_percent":48},
+           "logo":{"position":"top_left","max_width":300,"max_height":120},
+           "headline":{"position":"bottom_left","max_width":820,"font_size":68,"font_weight":700,"color":"#FFFFFF","max_lines":3},
+           "cta":{"position":"bottom_left","background":"#008CFF","color":"#FFFFFF","font_size":30,"border_radius":18}
+         }'::jsonb,
+         true, true
+       )
+       on conflict (organization_id, name)
+       do update set
+         brand_kit_id = excluded.brand_kit_id,
+         is_default = true,
+         is_active = true,
+         updated_at = now()
+       returning *`,
+      [organizationId, brandKit.id]
+    );
+
+    await client.query("commit");
+    return ok(res, {
+      message: "Kit de marca e template inicializados.",
+      data: {
+        brand_kit: brandKit,
+        template: templateResult.rows[0]
+      }
+    });
+  } catch (error) {
+    await client.query("rollback").catch(() => null);
+    return fail(res, 500, "Não foi possível inicializar o kit de marca.", error.message);
+  } finally {
+    client.release();
+  }
+}
+
 async function handleListCreatives(req, res) {
   try {
     const organizationId = getOrganizationId(req);
@@ -520,6 +621,7 @@ function registerCreativeCompositionRoutes(app) {
 
   const stackBefore = app._router?.stack?.length || 0;
   app.get("/api/creative/brand-kit", handleGetBrandKit);
+  app.post("/api/creative/brand-kit/initialize", handleInitializeBrandKit);
   app.post("/api/creative/compose", handleComposeCreative);
   app.patch("/api/creative/brand-kits/:id", handleUpdateBrandKit);
   app.get("/api/creative/campaigns/:campaignId/creatives", handleListCreatives);
