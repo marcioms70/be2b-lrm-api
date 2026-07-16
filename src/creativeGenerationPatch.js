@@ -5,7 +5,9 @@ import path from "path";
 import { pool, query } from "./db.js";
 
 const OPENAI_IMAGES_URL = "https://api.openai.com/v1/images/generations";
+const OPENAI_IMAGE_EDITS_URL = "https://api.openai.com/v1/images/edits";
 const UPLOAD_ROOT = process.env.UPLOAD_DIR || "/app/uploads";
+const MAX_REFERENCE_BYTES = 15 * 1024 * 1024;
 
 function ok(res, data = {}) {
   return res.json({ success: true, ...data });
@@ -164,23 +166,63 @@ async function loadConfiguration({ organizationId, campaignId, brandKitId, templ
   return { campaign, brandKit, template };
 }
 
-async function requestOpenAIImages({ apiKey, model, prompt, variants, size, quality }) {
-  const response = await fetch(OPENAI_IMAGES_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      n: variants,
-      size,
-      quality,
-      output_format: "png",
-      background: "opaque"
-    })
-  });
+async function downloadReferenceImage(url, index) {
+  const parsed = new URL(url);
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("URL de referência inválida.");
+
+  const response = await fetch(parsed, { signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new Error(`Não foi possível baixar a referência ${index + 1}: HTTP ${response.status}.`);
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > MAX_REFERENCE_BYTES) throw new Error(`A referência ${index + 1} excede 15 MB.`);
+
+  const contentType = response.headers.get("content-type")?.split(";")[0] || "image/png";
+  if (!contentType.startsWith("image/")) throw new Error(`A referência ${index + 1} não é uma imagem.`);
+  const extension = contentType === "image/jpeg" ? "jpg" : contentType === "image/webp" ? "webp" : "png";
+  return { buffer, contentType, fileName: `referencia-${index + 1}.${extension}` };
+}
+
+async function requestOpenAIImages({ apiKey, model, prompt, variants, size, quality, referenceImageUrls = [] }) {
+  const references = referenceImageUrls.filter(Boolean).slice(0, 4);
+  let response;
+
+  if (references.length > 0) {
+    const downloaded = await Promise.all(references.map(downloadReferenceImage));
+    const form = new FormData();
+    form.set("model", model);
+    form.set("prompt", `${prompt}\n\nUse as imagens anexadas somente como referências visuais autorizadas de estilo, produto, ambiente e composição. Não copie textos nem inclua logotipos na imagem-base.`);
+    form.set("n", String(variants));
+    form.set("size", size);
+    form.set("quality", quality);
+    form.set("output_format", "png");
+
+    for (const item of downloaded) {
+      form.append("image[]", new Blob([item.buffer], { type: item.contentType }), item.fileName);
+    }
+
+    response = await fetch(OPENAI_IMAGE_EDITS_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form
+    });
+  } else {
+    response = await fetch(OPENAI_IMAGES_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        prompt,
+        n: variants,
+        size,
+        quality,
+        output_format: "png",
+        background: "opaque"
+      })
+    });
+  }
 
   const body = await response.json().catch(() => ({}));
   const requestId = response.headers.get("x-request-id");
@@ -198,7 +240,7 @@ async function requestOpenAIImages({ apiKey, model, prompt, variants, size, qual
     throw new Error("A OpenAI não retornou nenhuma imagem.");
   }
 
-  return { body, requestId };
+  return { body, requestId, mode: references.length > 0 ? "edit_with_references" : "generation" };
 }
 
 async function handleGenerateCreative(req, res) {
@@ -252,7 +294,8 @@ async function handleGenerateCreative(req, res) {
           product_service: campaign.product_service,
           objective: campaign.objective,
           target_audience: campaign.target_audience,
-          prompt_additions: req.body?.prompt_additions || null
+          prompt_additions: req.body?.prompt_additions || null,
+          reference_image_urls: brandKit.reference_image_urls || []
         }),
         prompt,
         variants,
@@ -262,7 +305,15 @@ async function handleGenerateCreative(req, res) {
     );
     jobId = jobResult.rows[0].id;
 
-    const generated = await requestOpenAIImages({ apiKey, model, prompt, variants, size, quality });
+    const generated = await requestOpenAIImages({
+      apiKey,
+      model,
+      prompt,
+      variants,
+      size,
+      quality,
+      referenceImageUrls: brandKit.reference_image_urls || []
+    });
     const images = generated.body.data.filter((item) => item?.b64_json);
     if (images.length === 0) throw new Error("A OpenAI retornou uma resposta sem conteúdo de imagem.");
 
@@ -335,6 +386,8 @@ async function handleGenerateCreative(req, res) {
             model,
             JSON.stringify({
               provider: "openai",
+              generation_mode: generated.mode,
+              reference_image_count: (brandKit.reference_image_urls || []).length,
               provider_request_id: generated.requestId,
               composition_pending: true,
               template_id: template.id,
@@ -351,6 +404,7 @@ async function handleGenerateCreative(req, res) {
 
       const providerResponse = {
         request_id: generated.requestId,
+        mode: generated.mode,
         created: generated.body.created || null,
         output_count: creatives.length,
         usage: generated.body.usage || null
