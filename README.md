@@ -246,7 +246,12 @@ leads e regras automáticas disparadas. Dias com linha da Meta não somam o lan�
 `paid_traffic_campaigns.automation_id` (uuid, sem FK — a tabela `automations` vive no Supabase). O assistente do
 be2bdr já exigia escolher a automação, mas o valor era descartado. Agora é gravado em `POST/PATCH
 /api/paid-traffic/campaigns` (vazio vira `null`; texto que não é UUID → 400) e vem na linha da campanha
-devolvida por `GET /api/paid-traffic/instagram/campaign/:trackingCode`, que é o que o n8n usa para rotear o lead.
+devolvida por `GET /api/paid-traffic/instagram/campaign/:trackingCode`.
+
+Atenção: por enquanto o campo só é **gravado e exibido**. Nenhum fluxo do n8n conhecido (BDR, SDR, cadências,
+memória do chat) lê essa rota nem usa o `automation_id` da campanha; o `automation_id` que o fluxo BDR recebe
+vem das Automações do Be2B. Para a campanha acionar a automação escolhida, o ponto que recebe o lead do anúncio
+(por exemplo `POST /api/paid-traffic/inbound-lead`) ainda precisa ser ligado a ela.
 
 Ordem de deploy: o servidor aplica a migração sozinho no start. Se não conseguir (usuário sem DDL), as rotas de
 campanha ignoram colunas que o banco ainda não tem, em vez de falhar — então backend e banco podem subir em
