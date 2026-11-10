@@ -124,6 +124,17 @@ function buildTargeting(campaign) {
 }
 
 async function createMetaObjects({ campaign, connection, accessToken, status }) {
+  const created = {};
+  try {
+    return await createMetaObjectsInner({ campaign, connection, accessToken, status, created });
+  } catch (error) {
+    // Objetos já criados na Meta antes da falha: ficam registrados para limpeza manual.
+    error.partial = { ...created };
+    throw error;
+  }
+}
+
+async function createMetaObjectsInner({ campaign, connection, accessToken, status, created }) {
   const linkUrl = buildTrackingLink(campaign);
   const baseName = campaign.name || `Campanha ${campaign.tracking_code}`;
   const adAccountPath = `/${connection.ad_account_id}`;
@@ -136,6 +147,8 @@ async function createMetaObjects({ campaign, connection, accessToken, status }) 
   is_adset_budget_sharing_enabled: false
 });
 
+  created.meta_campaign_id = metaCampaign.id;
+
   const adSet = await graphPost(`${adAccountPath}/adsets`, accessToken, {
     name: `${baseName} - Conjunto`,
     campaign_id: metaCampaign.id,
@@ -147,6 +160,8 @@ async function createMetaObjects({ campaign, connection, accessToken, status }) 
     targeting: buildTargeting(campaign),
     status
   });
+
+  created.meta_adset_id = adSet.id;
 
   const creative = await graphPost(`${adAccountPath}/adcreatives`, accessToken, {
     name: `${baseName} - Criativo`,
@@ -164,6 +179,8 @@ async function createMetaObjects({ campaign, connection, accessToken, status }) 
       }
     }
   });
+
+  created.meta_creative_id = creative.id;
 
   const ad = await graphPost(`${adAccountPath}/ads`, accessToken, {
     name: `${baseName} - Anúncio`,
@@ -200,6 +217,19 @@ async function handleLivePublish(req, res) {
     const missing = validateReady(campaign, connection);
 
     if (missing.length > 0) return fail(res, 400, "Configuração incompleta para publicar na Meta Ads.", { missing });
+
+    // Idempotência: publicar duas vezes criaria campanhas duplicadas (e gasto duplicado) na Meta.
+    const existing = await query(
+      `select status, meta_campaign_id, updated_at from public.meta_ads_campaign_publications where organization_id = $1 and campaign_id = $2 limit 1`,
+      [organizationId, campaignId]
+    );
+    const prev = existing.rows[0];
+    const staleLock = prev?.status === "publishing" && Date.now() - new Date(prev.updated_at).getTime() > 10 * 60 * 1000;
+    if (prev && ["published", "paused", "publishing"].includes(prev.status) && !staleLock) {
+      return fail(res, 409, prev.status === "publishing"
+        ? "Já existe uma publicação em andamento para esta campanha."
+        : "Esta campanha já foi publicada na Meta Ads.", { meta_campaign_id: prev.meta_campaign_id, publication_status: prev.status });
+    }
 
     const job = await query(
       `insert into public.meta_ads_publish_jobs (organization_id, campaign_id, connection_id, status, request_payload, started_at) values ($1, $2, $3, 'running', $4::jsonb, now()) returning *`,
@@ -243,7 +273,7 @@ async function handleLivePublish(req, res) {
       }
     });
   } catch (error) {
-    const errorDetails = { message: error.message, meta: error.meta || null };
+    const errorDetails = { message: error.message, meta: error.meta || null, partial_meta_objects: error.partial || null };
 
     if (jobId) {
       await query(

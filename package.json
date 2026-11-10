@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/bootstrap.js",
-    "dev": "node --watch src/bootstrap.js"
+    "dev": "node --watch src/bootstrap.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "cors": "^2.8.5",

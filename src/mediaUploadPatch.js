@@ -107,6 +107,19 @@ function mediaUploadHandler(req, res) {
         return res.status(400).json({ success: false, message: "Arquivo é obrigatório." });
       }
 
+      // Com autenticação ativa, a empresa do formulário tem que ser a que o middleware validou
+      // (o corpo multipart só é lido aqui, depois do multer).
+      if (req.auth) {
+        if (!req.auth.organizationId) {
+          removeQuietly(file.path);
+          return res.status(400).json({ success: false, message: "Header x-organization-id é obrigatório para enviar mídia." });
+        }
+        if (req.body.organization_id !== req.auth.organizationId) {
+          removeQuietly(file.path);
+          return res.status(403).json({ success: false, message: "Sem acesso a esta empresa." });
+        }
+      }
+
       if (!req.body.organization_id || !req.body.campaign_id) {
         removeQuietly(file.path);
         return res.status(400).json({

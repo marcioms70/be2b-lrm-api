@@ -142,3 +142,50 @@ curl -X POST "https://api.be2b.tech/api/meta-ads/connect/manual" \
     "instagram_username": "instagram_teste"
   }'
 ```
+
+
+## Fase 2 — Autenticação, métricas reais e status na Meta
+
+### Autenticação
+
+O front envia `Authorization: Bearer <JWT do Supabase>` e `x-organization-id`. A API valida o
+token no Supabase e confere se o usuário é membro ativo da empresa (consulta `organization_users`
+com o token do próprio usuário, então a RLS decide). Defina `SUPABASE_URL` e `SUPABASE_ANON_KEY`.
+
+- **Rollout seguro:** suba com `API_AUTH_MODE=log` (registra o que seria bloqueado, sem bloquear),
+  confira os logs `[auth][log-only]`, depois troque para `enforce`.
+- **Sem essas variáveis a API continua aberta** e registra um aviso no start.
+- **Públicas:** `/health`, `/uploads/*`, `/r/:codigo`, redirecionador/resolução por tracking code e
+  `/api/meta-ads/oauth/callback` (state assinado).
+- **Webhooks de lead** (`/api/paid-traffic/inbound-lead`, `/instagram/inbound-lead`,
+  `/instagram/whatsapp-message`): se `INBOUND_WEBHOOK_SECRET` estiver definido, exigem o header
+  `x-webhook-secret`. Atualize os fluxos do n8n antes de definir o segredo.
+- `organization_id` divergente entre header, query e corpo → 400.
+
+### Métricas da Meta (`migrations/008_meta_insights_sync.sql`)
+
+- `POST /api/meta-ads/sync-insights` `{ organization_id, campaign_id?, days? (1–90, padrão 7) }`
+- Sincronização automática a cada `META_INSIGHTS_AUTO_SYNC_HOURS` horas (padrão 6; `0` desliga).
+- Grava em `paid_traffic_metrics` com `source = 'meta_api'`, uma linha por campanha/dia (upsert).
+  Lançamentos manuais (`source = 'manual'`) não são alterados.
+- Cliques = `inline_link_clicks` (cai para `clicks`). Leads da plataforma = UM `action_type`
+  (`lead` → `onsite_conversion.lead_grouped` → `onsite_conversion.messaging_conversation_started_7d`);
+  tipos sobrepostos nunca são somados.
+- Token expirado (código 190) marca a conexão como `needs_reconnect`.
+
+### Status e publicação
+
+- `POST /api/paid-traffic/campaigns/:id/status` e `/archive`: se a campanha foi publicada na Meta,
+  pausa/ativa **campanha, conjunto e anúncio** lá primeiro; se a Meta recusar, o status local **não**
+  muda. Finalizar/arquivar apenas PAUSA (ARCHIVED na Meta é irreversível). Escape explícito:
+  `skip_meta_sync: true` no corpo.
+- `GET /api/meta-ads/campaigns/:campaignId/publication?refresh=1`: situação da publicação e, com
+  `refresh=1`, a revisão do anúncio (`effective_status`, `issues_info`, `ad_review_feedback`).
+- `POST /api/meta-ads/publish-campaign-live` agora é idempotente (409 se já publicada/em andamento)
+  e registra os IDs de objetos criados na Meta quando a publicação falha no meio.
+
+### Testes
+
+```sh
+npm test   # node:test, sem dependências extras; inclui subir o servidor contra um Supabase falso
+```

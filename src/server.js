@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { pool, query } from "./db.js";
+import { createAuthMiddleware, logAuthStartup } from "./auth.js";
+import { MetaSyncError, registerMetaSyncRoutes, startInsightsAutoSync, syncMetaCampaignStatus } from "./metaSync.js";
 
 dotenv.config();
 
@@ -19,6 +21,12 @@ app.use(
 );
 
 app.use(express.json({ limit: "5mb" }));
+
+// Autenticação: DEVE vir antes de qualquer rota (as rotas dos *Patch.js são
+// reposicionadas depois destas por causa do listen patchado).
+const authMiddleware = createAuthMiddleware();
+logAuthStartup(authMiddleware);
+app.use(authMiddleware);
 
 function ok(res, data = {}) {
   return res.json({ success: true, ...data });
@@ -457,6 +465,14 @@ app.post("/api/paid-traffic/campaigns/:id/status", async (req, res) => {
     if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
     if (!status) return fail(res, 400, "Status é obrigatório.");
 
+    // Campanha publicada na Meta: pausar/ativar lá PRIMEIRO. Se a Meta recusar, o status
+    // local não muda (senão o be2bdr mostraria "pausada" com o anúncio ainda gastando).
+    // `skip_meta_sync: true` é um escape explícito (ex.: token da Meta expirado e a campanha já
+    // foi pausada à mão no Gerenciador). Fica registrado no retorno.
+    const meta = req.body?.skip_meta_sync === true
+      ? { synced: false, reason: "skipped_by_user" }
+      : await syncMetaCampaignStatus({ organizationId, campaignId: req.params.id, status });
+
     const result = await query(
       `update public.paid_traffic_campaigns set status = $1 where id = $2 and organization_id = $3 returning *`,
       [status, req.params.id, organizationId]
@@ -471,8 +487,9 @@ app.post("/api/paid-traffic/campaigns/:id/status", async (req, res) => {
       metadata: { status }
     });
 
-    return ok(res, { data: result.rows[0] });
+    return ok(res, { data: result.rows[0], meta_sync: meta });
   } catch (error) {
+    if (error instanceof MetaSyncError) return fail(res, error.httpStatus, error.message, error.details);
     return fail(res, 500, "Não foi possível alterar o status da campanha.", error.message);
   }
 });
@@ -481,6 +498,11 @@ app.post("/api/paid-traffic/campaigns/:id/archive", async (req, res) => {
   try {
     const organizationId = getOrganizationId(req);
     if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+
+    // Arquivar também PAUSA o anúncio na Meta (ARCHIVED na Meta é irreversível, então não usamos).
+    const meta = req.body?.skip_meta_sync === true
+      ? { synced: false, reason: "skipped_by_user" }
+      : await syncMetaCampaignStatus({ organizationId, campaignId: req.params.id, status: "arquivada" });
 
     const result = await query(
       `update public.paid_traffic_campaigns set status = 'arquivada' where id = $1 and organization_id = $2 returning *`,
@@ -496,8 +518,9 @@ app.post("/api/paid-traffic/campaigns/:id/archive", async (req, res) => {
       metadata: { status: "arquivada" }
     });
 
-    return ok(res, { data: result.rows[0] });
+    return ok(res, { data: result.rows[0], meta_sync: meta });
   } catch (error) {
+    if (error instanceof MetaSyncError) return fail(res, error.httpStatus, error.message, error.details);
     return fail(res, 500, "Não foi possível arquivar a campanha.", error.message);
   }
 });
@@ -1038,10 +1061,13 @@ app.get("/api/bdr/whatsapp-instances", async (req, res) => {
 /* =========================================================
    FALLBACK
 ========================================================= */
+registerMetaSyncRoutes(app);
+
 app.use((req, res) => {
   return fail(res, 404, "Endpoint não encontrado.");
 });
 
 app.listen(PORT, () => {
   console.log(`Be2B LRM API rodando na porta ${PORT}`);
+  startInsightsAutoSync();
 });
