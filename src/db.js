@@ -1,3 +1,7 @@
+// A configuração do PostgreSQL precisa estar disponível antes de avaliar
+// DATABASE_URL. Em módulos ESM, o dotenv.config() de server.js executa
+// tarde demais porque os imports são inicializados primeiro.
+import "dotenv/config";
 import pg from "pg";
 
 const { Pool } = pg;
