@@ -43,11 +43,13 @@ export function mapInsightRow(row) {
     leads,
     cpl: leads > 0 ? spend / leads : null,
     ctr: impressions > 0 ? (clicks / impressions) * 100 : null,
-    cpc: clicks > 0 ? spend / clicks : null
+    cpc: clicks > 0 ? spend / clicks : null,
+    // frequência do dia (impressões ÷ alcance, calculada pela Meta); null se não veio
+    frequency: toNum(row.frequency) > 0 ? toNum(row.frequency) : null
   };
 }
 
-export const INSIGHT_FIELDS = "date_start,date_stop,spend,impressions,clicks,inline_link_clicks,actions";
+export const INSIGHT_FIELDS = "date_start,date_stop,spend,impressions,clicks,inline_link_clicks,frequency,actions";
 
 export const MAX_SYNC_DAYS = 90;
 

@@ -168,7 +168,7 @@ com o token do próprio usuário, então a RLS decide). Defina `SUPABASE_URL` e 
 - Sincronização automática a cada `META_INSIGHTS_AUTO_SYNC_HOURS` horas (padrão 6; `0` desliga).
 - Grava em `paid_traffic_metrics` com `source = 'meta_api'`, uma linha por campanha/dia (upsert).
   Lançamentos manuais (`source = 'manual'`) não são alterados.
-- Cliques = `inline_link_clicks` (cai para `clicks`). Leads da plataforma = UM `action_type`
+- Cliques = `inline_link_clicks` (cai para `clicks`). Frequência diária (`frequency`, migração 010) alimenta a detecção de fadiga. Leads da plataforma = UM `action_type`
   (`lead` → `onsite_conversion.lead_grouped` → `onsite_conversion.messaging_conversation_started_7d`);
   tipos sobrepostos nunca são somados.
 - Token expirado (código 190) marca a conexão como `needs_reconnect`.

@@ -27,6 +27,8 @@ test("mapInsightRow calcula taxas a partir dos totais do dia", () => {
   assert.equal(m.cpl, 24.1);
   assert.equal(m.ctr, 2);
   assert.equal(m.cpc, 0.6025);
+  assert.equal(m.frequency, null); // não veio
+  assert.equal(mapInsightRow({ date_start: "2026-11-09", spend: "1", impressions: "10", frequency: "2.35" }).frequency, 2.35);
 });
 
 test("mapInsightRow sem dados não divide por zero", () => {

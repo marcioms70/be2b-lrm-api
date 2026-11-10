@@ -8,7 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { query } from "./db.js";
 
-const FILES = ["007_meta_ads_integration.sql", "008_meta_insights_sync.sql", "009_paid_traffic_rules.sql"];
+const FILES = ["007_meta_ads_integration.sql", "008_meta_insights_sync.sql", "009_paid_traffic_rules.sql", "010_metrics_frequency.sql"];
 let ready = null;
 
 export function ensureSchema() {

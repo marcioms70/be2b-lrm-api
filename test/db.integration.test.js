@@ -120,7 +120,7 @@ test("sync de insights: upsert por campanha/dia (sem duplicar) e preserva o lan√
   stubFetch((rec) => rec.url.includes("/M1/insights")
     ? { body: { data: [
         { date_start: d2, spend: "80", impressions: "5000", clicks: "100", inline_link_clicks: "90", actions: [{ action_type: "lead", value: "2" }, { action_type: "onsite_conversion.lead_grouped", value: "2" }] },
-        { date_start: d1, spend, impressions: "10000", clicks: "300", inline_link_clicks: "200", actions: [{ action_type: "lead", value: "5" }] },
+        { date_start: d1, spend, impressions: "10000", clicks: "300", inline_link_clicks: "200", frequency: "2.35", actions: [{ action_type: "lead", value: "5" }] },
       ] } }
     : { status: 404, body: { error: { message: "?" } } });
 
@@ -133,7 +133,7 @@ test("sync de insights: upsert por campanha/dia (sem duplicar) e preserva o lan√
   spend = "130.75";                                             // a Meta revisa o valor do dia
   await sync.syncOrganizationInsights({ organizationId: ORG, days: 7 });
 
-  const rows = (await query(`select report_date::text d, source, amount_spent::float8 spend, clicks, leads, cpl::float8 cpl from public.paid_traffic_metrics where campaign_id = $1 order by report_date, source`, [CAMP])).rows;
+  const rows = (await query(`select report_date::text d, source, amount_spent::float8 spend, clicks, leads, cpl::float8 cpl, frequency::float8 freq from public.paid_traffic_metrics where campaign_id = $1 order by report_date, source`, [CAMP])).rows;
   const meta = rows.filter((x) => x.source === "meta_api");
   assert.equal(meta.length, 2, "uma linha da Meta por dia (upsert, sem duplicar)");
   const m1 = meta.find((x) => x.d === d1);
@@ -141,6 +141,7 @@ test("sync de insights: upsert por campanha/dia (sem duplicar) e preserva o lan√
   assert.equal(m1.clicks, 200);                                 // clique no link
   assert.equal(m1.leads, 5);
   assert.equal(m1.cpl, 26.15);
+  assert.equal(m1.freq, 2.35);
   assert.equal(meta.find((x) => x.d === d2).leads, 2);          // um √∫nico action_type (n√£o 2+2)
   assert.equal(rows.filter((x) => x.source === "manual").length, 1, "lan√ßamento manual preservado");
 

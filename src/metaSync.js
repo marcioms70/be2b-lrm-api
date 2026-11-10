@@ -86,12 +86,13 @@ async function fetchDailyInsights({ token, metaCampaignId, since, until }) {
 async function upsertMetric(organizationId, campaignId, m) {
   await query(
     `insert into public.paid_traffic_metrics
-       (organization_id, campaign_id, report_date, impressions, clicks, leads, amount_spent, cpl, ctr, cpc, source)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'meta_api')
+       (organization_id, campaign_id, report_date, impressions, clicks, leads, amount_spent, cpl, ctr, cpc, frequency, source)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'meta_api')
      on conflict (campaign_id, report_date) where source = 'meta_api'
      do update set impressions = excluded.impressions, clicks = excluded.clicks, leads = excluded.leads,
-                   amount_spent = excluded.amount_spent, cpl = excluded.cpl, ctr = excluded.ctr, cpc = excluded.cpc`,
-    [organizationId, campaignId, m.report_date, m.impressions, m.clicks, m.leads, m.amount_spent, m.cpl, m.ctr, m.cpc]
+                   amount_spent = excluded.amount_spent, cpl = excluded.cpl, ctr = excluded.ctr, cpc = excluded.cpc,
+                   frequency = excluded.frequency`,
+    [organizationId, campaignId, m.report_date, m.impressions, m.clicks, m.leads, m.amount_spent, m.cpl, m.ctr, m.cpc, m.frequency]
   );
 }
 
