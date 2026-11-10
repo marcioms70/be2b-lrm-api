@@ -221,3 +221,22 @@ TEST_DATABASE_URL=postgresql://usuario@host:5432/banco_de_teste npm test
 ```
 Sem `TEST_DATABASE_URL` os testes de banco são ignorados. Use um banco **descartável**: o teste cria
 tabelas-base se faltarem e apaga os dados das empresas de teste.
+
+## Fase 4 — Relatório semanal por e-mail (`migrations/011_report_schedules.sql`)
+
+Resumo dos **7 últimos dias completos** (até ontem) comparado aos 7 anteriores: investimento, leads, CPL,
+qualificados, custo por qualificado, enviados ao CRM, campanhas da semana, campanhas que gastaram sem gerar
+leads e regras automáticas disparadas. Dias com linha da Meta não somam o lançamento manual do mesmo dia.
+
+- `GET/PUT /api/paid-traffic/report-schedule` — destinatários (até 5), dia da semana (1 = segunda … 7 = domingo),
+  hora local (padrão segunda 08h, `America/Sao_Paulo`), ativo e nome da empresa.
+- `POST /api/paid-traffic/report-schedule/preview` — devolve o assunto e o HTML sem enviar.
+- `POST /api/paid-traffic/report-schedule/send-test` — envia agora **só para os destinatários salvos**
+  (no máximo 1 por minuto).
+- **Somente administradores da empresa** (owner/admin/superadmin) acessam essas rotas. Isso depende da
+  autenticação estar ligada (`SUPABASE_URL`/`SUPABASE_ANON_KEY`); com a API aberta (modo `off`) não há como
+  saber o papel e a checagem é ignorada.
+- Envio pelo Resend (`RESEND_API_KEY`, `REPORT_FROM_EMAIL`, remetente verificado). Sem elas nada é enviado e a
+  tela avisa. Todo texto dinâmico (nome de campanha/empresa) é escapado no HTML; o assunto não aceita quebra de linha.
+- O envio agendado é reivindicado de forma atômica no banco (duas instâncias não duplicam), acontece uma vez por
+  dia/agendamento e, se falhar, é repetido até 3 vezes no mesmo dia. O resultado fica em `last_status`/`last_error`.

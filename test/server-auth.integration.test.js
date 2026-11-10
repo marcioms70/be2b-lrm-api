@@ -25,7 +25,7 @@ before(async () => {
     if (!auth.includes("good")) { res.statusCode = 401; return res.end("{}"); }
     if (req.url.startsWith("/auth/v1/user")) return res.end(JSON.stringify({ id: "44444444-4444-4444-8444-444444444444", email: "u@x.com" }));
     if (req.url.startsWith("/rest/v1/organization_users")) {
-      return res.end(JSON.stringify(req.url.includes(`organization_id=eq.${ORG}`) ? [{ status: "active", is_blocked: false }] : []));
+      return res.end(JSON.stringify(req.url.includes(`organization_id=eq.${ORG}`) ? [{ status: "active", is_blocked: false, role: auth.includes("good-admin") ? "admin" : "member" }] : []));
     }
     return res.end("[]"); // organizations: sem visibilidade
   });
@@ -40,7 +40,7 @@ before(async () => {
       PORT: String(port), NODE_ENV: "production", UPLOAD_DIR: uploads,
       DATABASE_URL: "postgresql://u:p@127.0.0.1:1/none",
       SUPABASE_URL: `http://127.0.0.1:${supabase.address().port}`, SUPABASE_ANON_KEY: "anon",
-      META_INSIGHTS_AUTO_SYNC_HOURS: "0", RULES_EVAL_INTERVAL_MINUTES: "0"
+      META_INSIGHTS_AUTO_SYNC_HOURS: "0", RULES_EVAL_INTERVAL_MINUTES: "0", REPORT_EVAL_INTERVAL_MINUTES: "0"
     }
   });
   server.stdout.on("data", (d) => (logs += d));
@@ -80,7 +80,11 @@ test("rotas registradas pelos *Patch.js também exigem login", async () => {
     ["PATCH", `/api/paid-traffic/rules/${CAMPAIGN}`],
     ["DELETE", `/api/paid-traffic/rules/${CAMPAIGN}`],
     ["GET", "/api/paid-traffic/rules/runs"],
-    ["POST", "/api/paid-traffic/rules/run"]
+    ["POST", "/api/paid-traffic/rules/run"],
+    ["GET", "/api/paid-traffic/report-schedule"],
+    ["PUT", "/api/paid-traffic/report-schedule"],
+    ["POST", "/api/paid-traffic/report-schedule/preview"],
+    ["POST", "/api/paid-traffic/report-schedule/send-test"]
   ]) {
     const r = await call(p, { method });
     assert.equal(r.status, 401, `${method} ${p} deveria exigir login (veio ${r.status})`);
@@ -125,4 +129,17 @@ test("endpoint inexistente continua sendo 404 JSON (após autenticar)", async ()
 test("rotas de regras: id inválido → 400 depois de autenticar", async () => {
   const r = await call("/api/paid-traffic/rules/nao-e-uuid", { method: "PATCH", headers: { ...authed().headers, "content-type": "application/json" }, body: "{}" });
   assert.equal(r.status, 400);
+});
+
+test("relatório semanal: membro comum NÃO configura destinatários (403); administrador passa pela checagem", async () => {
+  const member = { headers: { authorization: "Bearer good", "x-organization-id": ORG, "content-type": "application/json" } };
+  for (const [method, path] of [["GET", "/api/paid-traffic/report-schedule"], ["PUT", "/api/paid-traffic/report-schedule"], ["POST", "/api/paid-traffic/report-schedule/preview"], ["POST", "/api/paid-traffic/report-schedule/send-test"]]) {
+    const r = await call(path, { method, ...member, body: method === "GET" ? undefined : "{}" });
+    assert.equal(r.status, 403, `${method} ${path}`);
+    assert.match((await r.json()).message, /administradores/);
+  }
+  const admin = { headers: { authorization: "Bearer good-admin", "x-organization-id": ORG, "content-type": "application/json" } };
+  const r = await call("/api/paid-traffic/report-schedule", { method: "GET", ...admin });
+  assert.notEqual(r.status, 403);   // passou da autorização (sem banco neste teste, falha depois com 500)
+  assert.notEqual(r.status, 401);
 });

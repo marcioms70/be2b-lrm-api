@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyRoute, createAuthMiddleware, extractBearer, readAuthConfig, resolveOrganizationId } from "../src/auth.js";
+import { classifyRoute, createAuthMiddleware, extractBearer, isOrgAdmin, readAuthConfig, resolveOrganizationId } from "../src/auth.js";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -95,7 +95,23 @@ test("membro ativo passa e req.auth é preenchido", async () => {
   const mw = createAuthMiddleware({ env: ENV, logger: silent, fetchImpl: fakeSupabase({ memberships: { [ORG]: [{ status: "active", is_blocked: false, role: "admin" }] } }) });
   const r = await run(mw, { headers: { authorization: "Bearer good", "x-organization-id": ORG } });
   assert.equal(r.passed, true);
-  assert.deepEqual(r.req.auth, { userId: "u1", email: "a@b.c", organizationId: ORG });
+  assert.deepEqual(r.req.auth, { userId: "u1", email: "a@b.c", organizationId: ORG, role: "admin" });
+  assert.equal(isOrgAdmin(r.req), true);
+});
+
+test("papel do usuário: owner/admin/superadmin administram; membro comum não; sem auth (modo off) passa", async () => {
+  const mk = (role) => createAuthMiddleware({ env: ENV, logger: silent, fetchImpl: fakeSupabase({ memberships: { [ORG]: [{ status: "active", is_blocked: false, role }] } }) });
+  for (const [role, expected] of [["owner", true], ["admin", true], ["member", false], ["viewer", false]]) {
+    const r = await run(mk(role), { headers: { authorization: "Bearer good", "x-organization-id": ORG } });
+    assert.equal(r.req.auth.role, role);
+    assert.equal(isOrgAdmin(r.req), expected, role);
+  }
+  // superadmin: sem vínculo, mas a RLS enxerga a empresa
+  const sup = createAuthMiddleware({ env: ENV, logger: silent, fetchImpl: fakeSupabase({ visibleOrgs: [ORG] }) });
+  const r = await run(sup, { headers: { authorization: "Bearer good", "x-organization-id": ORG } });
+  assert.equal(r.req.auth.role, "superadmin");
+  assert.equal(isOrgAdmin(r.req), true);
+  assert.equal(isOrgAdmin({}), true); // modo off: sem req.auth
 });
 
 test("usuário de outra empresa → 403 (não vaza dados entre empresas)", async () => {

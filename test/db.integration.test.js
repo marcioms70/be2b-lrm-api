@@ -15,7 +15,7 @@ const OTHER_ORG = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CAMP = "c0000000-0000-4000-8000-000000000001";
 const CAMP2 = "c0000000-0000-4000-8000-000000000002";
 
-let query, sync, rules, tokenCrypto, realFetch;
+let query, sync, rules, reports, tokenCrypto, realFetch;
 const calls = [];
 
 function stubFetch(handler) {
@@ -40,6 +40,7 @@ before(async () => {
   tokenCrypto = await import("../src/tokenCrypto.js");
   sync = await import("../src/metaSync.js");
   rules = await import("../src/rulesRunner.js");
+  reports = await import("../src/reportRunner.js");
   realFetch = globalThis.fetch;
 
   await query(`create extension if not exists pgcrypto`);
@@ -74,12 +75,15 @@ beforeEach(async () => {
   calls.length = 0;
   globalThis.fetch = realFetch;
   for (const org of [ORG, OTHER_ORG]) {
+    await query(`delete from public.paid_traffic_report_schedules where organization_id = $1`, [org]);
     await query(`delete from public.paid_traffic_rules where organization_id = $1`, [org]); // cascata em rule_runs
     await query(`delete from public.meta_ads_campaign_publications where organization_id = $1`, [org]).catch(() => null);
     await query(`delete from public.meta_ads_connections where organization_id = $1`, [org]).catch(() => null);
     await query(`delete from public.paid_traffic_campaigns where organization_id = $1`, [org]);
   }
   delete process.env.RULES_ALLOW_PAUSE;
+  delete process.env.RESEND_API_KEY;
+  delete process.env.REPORT_FROM_EMAIL;
 });
 
 async function seedCampaign(id = CAMP, over = {}) {
@@ -359,4 +363,163 @@ test("regras: dias sem leads e isolamento entre empresas", { skip }, async () =>
   assert.equal(r.results[0].value, 6);
   assert.equal(r.results[0].campaign_id, CAMP);
   assert.equal((await rules.listRuns(OTHER_ORG)).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Fase 4 — relatório semanal por e-mail
+// ---------------------------------------------------------------------------
+const MON = new Date("2026-11-09T12:00:00Z");           // segunda-feira 09h em São Paulo; semana do relatório: 02/11 a 08/11
+const enableEmail = () => { process.env.RESEND_API_KEY = "re_test"; process.env.REPORT_FROM_EMAIL = "Be2B <relatorios@be2b.tech>"; };
+const emailCalls = () => calls.filter((c) => c.url.startsWith("/emails"));
+function stubResend(handler = () => ({ body: { id: "em_1" } })) {
+  stubFetch((rec) => (rec.url.startsWith("/emails") ? handler(rec) : { status: 404, body: {} }));
+}
+async function seedWeek() {
+  await seedCampaign();
+  await query(`insert into public.paid_traffic_metrics (campaign_id, organization_id, report_date, amount_spent, impressions, clicks, source) values ($1,$2,'2026-11-04',300,10000,200,'manual')`, [CAMP, ORG]);
+  for (const st of ["qualificado", "novo", "enviado_crm"]) await query(`insert into public.paid_traffic_leads (organization_id, campaign_id, status, created_at) values ($1,$2,$3,'2026-11-04T15:00:00Z')`, [ORG, CAMP, st]);
+}
+
+test("relatório: agendamento valida, usa padrões seguros e faz upsert", { skip }, async () => {
+  assert.equal(await reports.getSchedule(ORG), null);
+  const bad = await reports.saveSchedule(ORG, { recipients: ["sem-arroba"] });
+  assert.equal(bad.ok, false);
+  assert.equal(await reports.getSchedule(ORG), null, "entrada inválida não grava nada");
+
+  const first = await reports.saveSchedule(ORG, { recipients: ["A@x.com", "a@x.com", "b@y.com"], org_name: "Be2B" }, "00000000-0000-4000-8000-000000000009");
+  assert.equal(first.ok, true);
+  assert.deepEqual(first.schedule.recipients, ["a@x.com", "b@y.com"]);
+  assert.equal(first.schedule.weekday, 1);                       // padrão: segunda
+  assert.equal(first.schedule.hour, 8);
+  assert.equal(first.schedule.is_active, true);
+  assert.equal(first.schedule.timezone, "America/Sao_Paulo");
+
+  const second = await reports.saveSchedule(ORG, { hour: 10, is_active: false });
+  assert.equal(second.schedule.hour, 10);
+  assert.equal(second.schedule.is_active, false);
+  assert.deepEqual(second.schedule.recipients, ["a@x.com", "b@y.com"], "upsert não apaga o que não veio");
+  assert.equal((await query(`select count(*)::int n from public.paid_traffic_report_schedules where organization_id = $1`, [ORG])).rows[0].n, 1);
+
+  // o banco também protege: mais de 5 destinatários é rejeitado
+  await assert.rejects(query(`update public.paid_traffic_report_schedules set recipients = $2 where organization_id = $1`, [ORG, ["1@x.com", "2@x.com", "3@x.com", "4@x.com", "5@x.com", "6@x.com"]]));
+});
+
+test("relatório: gera a prévia com os números da semana da empresa (e só dela)", { skip }, async () => {
+  await seedWeek();
+  // dados de OUTRA empresa e de fora da janela não podem aparecer
+  await query(`insert into public.paid_traffic_campaigns (id, organization_id, name, status) values ($1,$2,'Alheia','ativa')`, [CAMP2, OTHER_ORG]);
+  await query(`insert into public.paid_traffic_metrics (campaign_id, organization_id, report_date, amount_spent) values ($1,$2,'2026-11-04',7777)`, [CAMP2, OTHER_ORG]);
+  await query(`insert into public.paid_traffic_metrics (campaign_id, organization_id, report_date, amount_spent) values ($1,$2,'2026-10-01',5555)`, [CAMP, ORG]);
+
+  const { report, email } = await reports.renderForOrganization(ORG, { orgName: "Be2B", now: MON });
+  assert.equal(report.cur.spend, 300);
+  assert.equal(report.cur.leads, 3);
+  assert.equal(report.cur.qualified, 2);
+  assert.equal(report.cur.cpl, 100);
+  assert.equal(report.cur.crm, 1);
+  assert.equal(email.subject, "Relatório semanal de tráfego pago — Be2B (02/11 a 08/11)");
+  assert.match(email.html, /Campanha A/);
+  assert.ok(!email.html.includes("Alheia") && !/7\.777/.test(email.html) && !/5\.555/.test(email.html));
+});
+
+test("relatório: dia com linha da Meta não soma o lançamento manual do mesmo dia", { skip }, async () => {
+  await seedWeek();
+  await query(`insert into public.paid_traffic_metrics (campaign_id, organization_id, report_date, amount_spent, source) values ($1,$2,'2026-11-04',280,'meta_api')`, [CAMP, ORG]);
+  const { report } = await reports.renderForOrganization(ORG, { now: MON });
+  assert.equal(report.cur.spend, 280);
+});
+
+test("relatório: envio agendado manda uma vez por dia, com os destinatários salvos e sem vazar o token", { skip }, async () => {
+  enableEmail(); await seedWeek();
+  await reports.saveSchedule(ORG, { recipients: ["gestor@empresa.com", "dono@empresa.com"], weekday: 1, hour: 8, org_name: "Be2B" });
+  stubResend();
+
+  const r1 = await reports.runDueReports(MON);
+  assert.deepEqual(r1, { due: 1, sent: 1, failed: 0 });
+  const [c] = emailCalls();
+  assert.equal(c.auth, "Bearer re_test");
+  const sent = JSON.parse(c.body);
+  assert.deepEqual(sent.to, ["gestor@empresa.com", "dono@empresa.com"]);
+  assert.equal(sent.from, "Be2B <relatorios@be2b.tech>");
+  assert.match(sent.subject, /02\/11 a 08\/11/);
+  assert.match(sent.html, /R\$\s?300,00/);
+
+  const row = (await query(`select last_status, last_sent_at, last_error from public.paid_traffic_report_schedules where organization_id = $1`, [ORG])).rows[0];
+  assert.equal(row.last_status, "sent");
+  assert.ok(row.last_sent_at);
+
+  const r2 = await reports.runDueReports(MON);                                    // mesma segunda-feira: não repete
+  assert.equal(r2.due, 0);
+  assert.equal(emailCalls().length, 1);
+  const nextMonday = new Date("2026-11-16T12:00:00Z");
+  assert.equal((await reports.runDueReports(nextMonday)).sent, 1, "na semana seguinte envia de novo");
+});
+
+test("relatório: não envia fora do dia/hora, inativo, sem destinatário ou sem e-mail configurado", { skip }, async () => {
+  await seedWeek(); stubResend();
+  await reports.saveSchedule(ORG, { recipients: ["a@x.com"], weekday: 1, hour: 8 });
+
+  assert.equal((await reports.runDueReports(MON)).due, 0, "e-mail não configurado: não tenta enviar");
+  enableEmail();
+  assert.equal((await reports.runDueReports(new Date("2026-11-10T12:00:00Z"))).due, 0, "terça-feira");
+  assert.equal((await reports.runDueReports(new Date("2026-11-09T09:00:00Z"))).due, 0, "06h em São Paulo: cedo demais");
+  await reports.saveSchedule(ORG, { is_active: false });
+  assert.equal((await reports.runDueReports(MON)).due, 0);
+  await reports.saveSchedule(ORG, { is_active: true, recipients: [] });
+  assert.equal((await reports.runDueReports(MON)).due, 0);
+  assert.equal(emailCalls().length, 0);
+});
+
+test("relatório: falha do provedor é registrada e repetida no máximo 3 vezes no dia", { skip }, async () => {
+  enableEmail(); await seedWeek();
+  await reports.saveSchedule(ORG, { recipients: ["a@x.com"], weekday: 1, hour: 8 });
+  stubResend(() => ({ status: 422, body: { message: "domínio não verificado" } }));
+
+  for (let i = 1; i <= 3; i++) {
+    const r = await reports.runDueReports(MON);
+    assert.deepEqual(r, { due: 1, sent: 0, failed: 1 }, `tentativa ${i}`);
+  }
+  const row = (await query(`select last_status, last_error, attempts from public.paid_traffic_report_schedules where organization_id = $1`, [ORG])).rows[0];
+  assert.equal(row.last_status, "failed");
+  assert.match(row.last_error, /domínio não verificado/);
+  assert.equal(row.attempts, 3);
+
+  const fourth = await reports.runDueReports(MON);
+  assert.equal(fourth.due, 0, "estourou as tentativas do dia");
+  assert.equal(emailCalls().length, 3);
+
+  // no próximo dia de envio volta a tentar — e agora com o provedor corrigido
+  stubResend();
+  assert.equal((await reports.runDueReports(new Date("2026-11-16T12:00:00Z"))).sent, 1);
+});
+
+test("relatório: o teste manual só vai para os destinatários salvos e tem limite de 1 por minuto", { skip }, async () => {
+  await seedWeek();
+  stubResend();
+  const off = await reports.sendTest(ORG);
+  assert.equal(off.status, 503);                                                  // e-mail não configurado
+
+  enableEmail();
+  assert.equal((await reports.sendTest(ORG)).status, 400);                        // nada salvo ainda
+  await reports.saveSchedule(ORG, { recipients: ["a@x.com"] });
+  const ok1 = await reports.sendTest(ORG);
+  assert.deepEqual(ok1, { ok: true, sent_to: 1 });
+  assert.deepEqual(JSON.parse(emailCalls()[0].body).to, ["a@x.com"]);
+
+  const again = await reports.sendTest(ORG);
+  assert.equal(again.status, 429);
+  assert.equal(emailCalls().length, 1);
+
+  await query(`update public.paid_traffic_report_schedules set last_test_at = now() - interval '2 minutes' where organization_id = $1`, [ORG]);
+  assert.equal((await reports.sendTest(ORG)).ok, true);
+});
+
+test("relatório: erro do provedor no teste manual volta com mensagem clara", { skip }, async () => {
+  enableEmail(); await seedWeek();
+  await reports.saveSchedule(ORG, { recipients: ["a@x.com"] });
+  stubResend(() => ({ status: 422, body: { message: "domínio não verificado" } }));
+  const r = await reports.sendTest(ORG);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 422);
+  assert.match(r.message, /domínio não verificado/);
 });

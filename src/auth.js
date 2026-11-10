@@ -91,6 +91,18 @@ export function readAuthConfig(env = process.env) {
   return { url, anonKey, configured, mode, webhookSecret: env.INBOUND_WEBHOOK_SECRET || "" };
 }
 
+/** Papéis que podem administrar configurações da empresa (destinatários de relatório etc.). */
+export const ADMIN_ROLES = ["owner", "admin", "superadmin"];
+
+/**
+ * A requisição veio de administrador da empresa? Com a autenticação desligada (modo off) não há
+ * como saber o papel, e a API inteira está aberta: devolve true para manter a compatibilidade.
+ */
+export function isOrgAdmin(req) {
+  if (!req.auth) return true;
+  return ADMIN_ROLES.includes(req.auth.role);
+}
+
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
@@ -150,18 +162,20 @@ export function createAuthMiddleware(deps = {}) {
       );
       if (!memberships.ok) return undefined;
       const rows = await memberships.json();
-      let allowed;
+      let result;
       if (Array.isArray(rows) && rows.length > 0) {
-        allowed = rows.some((r) => r.status === "active" && r.is_blocked === false);
+        const active = rows.find((r) => r.status === "active" && r.is_blocked === false);
+        result = { allowed: !!active, role: active?.role || null };
       } else {
         // Sem vínculo: só passa se a RLS deixar o usuário enxergar a empresa (ex.: superadmin).
         const org = await supabaseGet(`/rest/v1/organizations?select=id&id=eq.${organizationId}`, token);
         if (!org.ok) return undefined;
         const orgRows = await org.json();
-        allowed = Array.isArray(orgRows) && orgRows.length > 0;
+        const visible = Array.isArray(orgRows) && orgRows.length > 0;
+        result = { allowed: visible, role: visible ? "superadmin" : null };
       }
-      cacheSet(key, allowed, allowed ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS);
-      return allowed;
+      cacheSet(key, result, result.allowed ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS);
+      return result;
     } catch (err) {
       logger.error("[auth] falha ao validar vínculo com a empresa:", err.message);
       return undefined;
@@ -199,14 +213,16 @@ export function createAuthMiddleware(deps = {}) {
     const { organizationId, conflict } = resolveOrganizationId(req);
     if (conflict) return reject(req, res, next, 400, "organization_id divergente entre header, query e corpo.");
 
+    let role = null;
     if (organizationId) {
       if (!UUID_RE.test(organizationId)) return reject(req, res, next, 400, "organization_id inválido.");
       const member = await isMember(token, user.id, organizationId);
       if (member === undefined) return reject(req, res, next, 503, "Não foi possível validar o acesso à empresa. Tente novamente.");
-      if (!member) return reject(req, res, next, 403, "Sem acesso a esta empresa.");
+      if (!member.allowed) return reject(req, res, next, 403, "Sem acesso a esta empresa.");
+      role = member.role;
     }
 
-    req.auth = { userId: user.id, email: user.email, organizationId };
+    req.auth = { userId: user.id, email: user.email, organizationId, role };
     return next();
   }
 
