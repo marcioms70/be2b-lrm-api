@@ -240,3 +240,14 @@ leads e regras automáticas disparadas. Dias com linha da Meta não somam o lan�
   tela avisa. Todo texto dinâmico (nome de campanha/empresa) é escapado no HTML; o assunto não aceita quebra de linha.
 - O envio agendado é reivindicado de forma atômica no banco (duas instâncias não duplicam), acontece uma vez por
   dia/agendamento e, se falhar, é repetido até 3 vezes no mesmo dia. O resultado fica em `last_status`/`last_error`.
+
+### Automação de atendimento na campanha (`migrations/012_campaign_automation.sql`)
+
+`paid_traffic_campaigns.automation_id` (uuid, sem FK — a tabela `automations` vive no Supabase). O assistente do
+be2bdr já exigia escolher a automação, mas o valor era descartado. Agora é gravado em `POST/PATCH
+/api/paid-traffic/campaigns` (vazio vira `null`; texto que não é UUID → 400) e vem na linha da campanha
+devolvida por `GET /api/paid-traffic/instagram/campaign/:trackingCode`, que é o que o n8n usa para rotear o lead.
+
+Ordem de deploy: o servidor aplica a migração sozinho no start. Se não conseguir (usuário sem DDL), as rotas de
+campanha ignoram colunas que o banco ainda não tem, em vez de falhar — então backend e banco podem subir em
+qualquer ordem. Aplique a migração manualmente nesse caso.

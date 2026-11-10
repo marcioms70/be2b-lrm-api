@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { pool, query } from "./db.js";
 import { createAuthMiddleware, logAuthStartup } from "./auth.js";
+import { ensureSchema } from "./migrate.js";
 import { registerRulesRoutes, startRulesScheduler } from "./rulesRunner.js";
 import { registerReportRoutes, startReportScheduler } from "./reportRunner.js";
 import { MetaSyncError, registerMetaSyncRoutes, startInsightsAutoSync, syncMetaCampaignStatus } from "./metaSync.js";
@@ -171,6 +172,7 @@ const campaignFields = [
   "cta",
   "creative_notes",
   "agent_id",
+  "automation_id",
   "whatsapp_instance_id",
   "whatsapp_destination",
   "initial_bdr_message",
@@ -189,6 +191,33 @@ const campaignFields = [
 ];
 
 const campaignUpdatableFields = campaignFields.filter((f) => !["organization_id", "created_by"].includes(f));
+
+/**
+ * Colunas que existem de fato na tabela (cache de 5 min). Campos da lista acima que o banco ainda
+ * não tem (migração pendente) são ignorados em vez de derrubar a criação/edição com "column does not exist".
+ */
+const columnCache = new Map();
+async function existingColumns(table) {
+  const hit = columnCache.get(table);
+  if (hit && hit.exp > Date.now()) return hit.cols;
+  const r = await query(`select column_name from information_schema.columns where table_schema = 'public' and table_name = $1`, [table]);
+  const cols = new Set(r.rows.map((x) => x.column_name));
+  columnCache.set(table, { cols, exp: Date.now() + 5 * 60_000 });
+  return cols;
+}
+async function campaignFieldsNow() {
+  const cols = await existingColumns("paid_traffic_campaigns");
+  return { all: campaignFields.filter((f) => cols.has(f)), updatable: campaignUpdatableFields.filter((f) => cols.has(f)) };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** automation_id vazio vira null; texto que não é UUID é erro do cliente (400), não falha de banco (500). */
+function normalizeAutomationId(body) {
+  if (!body || !Object.prototype.hasOwnProperty.call(body, "automation_id")) return { ok: true };
+  const v = body.automation_id;
+  if (v === null || v === undefined || v === "") { body.automation_id = null; return { ok: true }; }
+  return UUID_RE.test(String(v)) ? { ok: true } : { ok: false };
+}
 
 const mediaFields = [
   "campaign_id",
@@ -388,9 +417,11 @@ app.post("/api/paid-traffic/campaigns", async (req, res) => {
       return fail(res, 400, "Nome, objetivo e plataforma são obrigatórios.");
     }
 
+    if (!normalizeAutomationId(req.body).ok) return fail(res, 400, "automation_id inválido.");
+    const fields = await campaignFieldsNow();
     const data = await insertReturning(
       "paid_traffic_campaigns",
-      campaignFields,
+      fields.all,
       req.body,
       {
         organization_id: organizationId,
@@ -436,7 +467,9 @@ app.patch("/api/paid-traffic/campaigns/:id", async (req, res) => {
     const organizationId = getOrganizationId(req);
     if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
 
-    const { updates, values, index } = buildUpdate(req.body, campaignUpdatableFields);
+    if (!normalizeAutomationId(req.body).ok) return fail(res, 400, "automation_id inválido.");
+    const fields = await campaignFieldsNow();
+    const { updates, values, index } = buildUpdate(req.body, fields.updatable);
     if (updates.length === 0) return fail(res, 400, "Nenhum campo válido enviado para atualização.");
     values.push(req.params.id, organizationId);
 
@@ -565,9 +598,10 @@ app.post("/api/paid-traffic/campaigns/:id/duplicate", async (req, res) => {
     if (original.rowCount === 0) return fail(res, 404, "Campanha original não encontrada.");
 
     const c = original.rows[0];
+    const fields = await campaignFieldsNow();
     const data = await insertReturning(
       "paid_traffic_campaigns",
-      campaignFields,
+      fields.all,
       c,
       {
         id: undefined,
@@ -1073,6 +1107,8 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Be2B LRM API rodando na porta ${PORT}`);
+  // Garante as migrações idempotentes (007–012) já no start; se falhar (ex.: permissão), segue com o que existe.
+  ensureSchema().catch((e) => console.error("[migrate] não foi possível aplicar as migrações no start:", e.message));
   startInsightsAutoSync();
   startRulesScheduler();
   startReportScheduler();
