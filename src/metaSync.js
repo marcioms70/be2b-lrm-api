@@ -4,10 +4,8 @@
  *  - pausar/ativar campanhas publicadas refletindo na Meta
  *  - consulta da publicação e da revisão do anúncio
  */
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { query } from "./db.js";
+import { ensureSchema } from "./migrate.js";
 import { decryptToken } from "./tokenCrypto.js";
 import { MetaGraphError, graphRequest } from "./metaGraph.js";
 import { INSIGHT_FIELDS, buildWindow, mapInsightRow, metaStatusFor } from "./metaInsightsMap.js";
@@ -19,16 +17,6 @@ export class MetaSyncError extends Error {
     this.httpStatus = httpStatus;
     this.details = details;
   }
-}
-
-let schemaReady = false;
-async function ensureSchema() {
-  if (schemaReady) return;
-  const dir = path.dirname(fileURLToPath(import.meta.url));
-  for (const file of ["007_meta_ads_integration.sql", "008_meta_insights_sync.sql"]) {
-    await query(fs.readFileSync(path.resolve(dir, "../migrations", file), "utf8"));
-  }
-  schemaReady = true;
 }
 
 // ---------------------------------------------------------------------------

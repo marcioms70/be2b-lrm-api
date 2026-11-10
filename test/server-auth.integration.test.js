@@ -40,7 +40,7 @@ before(async () => {
       PORT: String(port), NODE_ENV: "production", UPLOAD_DIR: uploads,
       DATABASE_URL: "postgresql://u:p@127.0.0.1:1/none",
       SUPABASE_URL: `http://127.0.0.1:${supabase.address().port}`, SUPABASE_ANON_KEY: "anon",
-      META_INSIGHTS_AUTO_SYNC_HOURS: "0"
+      META_INSIGHTS_AUTO_SYNC_HOURS: "0", RULES_EVAL_INTERVAL_MINUTES: "0"
     }
   });
   server.stdout.on("data", (d) => (logs += d));
@@ -74,7 +74,13 @@ test("rotas registradas pelos *Patch.js também exigem login", async () => {
     ["POST", "/api/creative/generate"],
     ["GET", "/api/creative/brand-kit"],
     ["POST", "/api/meta-ads/sync-insights"],
-    ["GET", `/api/meta-ads/campaigns/${CAMPAIGN}/publication`]
+    ["GET", `/api/meta-ads/campaigns/${CAMPAIGN}/publication`],
+    ["GET", "/api/paid-traffic/rules"],
+    ["POST", "/api/paid-traffic/rules"],
+    ["PATCH", `/api/paid-traffic/rules/${CAMPAIGN}`],
+    ["DELETE", `/api/paid-traffic/rules/${CAMPAIGN}`],
+    ["GET", "/api/paid-traffic/rules/runs"],
+    ["POST", "/api/paid-traffic/rules/run"]
   ]) {
     const r = await call(p, { method });
     assert.equal(r.status, 401, `${method} ${p} deveria exigir login (veio ${r.status})`);
@@ -114,4 +120,9 @@ test("header ≠ corpo → 400", async () => {
 test("endpoint inexistente continua sendo 404 JSON (após autenticar)", async () => {
   const r = await call("/api/nao-existe", authed());
   assert.equal(r.status, 404);
+});
+
+test("rotas de regras: id inválido → 400 depois de autenticar", async () => {
+  const r = await call("/api/paid-traffic/rules/nao-e-uuid", { method: "PATCH", headers: { ...authed().headers, "content-type": "application/json" }, body: "{}" });
+  assert.equal(r.status, 400);
 });

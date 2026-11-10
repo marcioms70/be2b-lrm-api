@@ -189,3 +189,35 @@ com o token do próprio usuário, então a RLS decide). Defina `SUPABASE_URL` e 
 ```sh
 npm test   # node:test, sem dependências extras; inclui subir o servidor contra um Supabase falso
 ```
+
+## Fase 3 — Regras automáticas (`migrations/009_paid_traffic_rules.sql`)
+
+Regras avaliadas sobre campanhas **ativas**, com métricas dos últimos N dias (1–30):
+`cpl`, `cost_per_qualified`, `spend`, `leads`, `ctr`, `cpc`, `days_without_leads`, `balance`.
+Operadores `>`, `>=`, `<`, `<=`. O CPL usa os leads do funil LRM (`paid_traffic_leads`); com gasto ≥ gasto
+mínimo e **zero leads** o CPL é tratado como infinito (uma regra `cpl > X` dispara). Nos dias em que há
+linha da Meta, o lançamento manual do mesmo dia não é somado.
+
+- `GET/POST /api/paid-traffic/rules`, `PATCH/DELETE /api/paid-traffic/rules/:id`
+- `GET /api/paid-traffic/rules/runs` — log de execuções
+- `POST /api/paid-traffic/rules/run` `{ dry_run?: true }` — avalia agora; com `dry_run` só mostra o que aconteceria
+
+**Segurança operacional**
+
+- Ação padrão: **notificar** (log + evento no histórico da campanha). **Pausar** é opt-in por regra.
+- Pausar passa pela mesma rota de status: pausa **na Meta primeiro**; se a Meta recusar, a campanha continua
+  ativa e a falha é registrada. `RULES_ALLOW_PAUSE=false` desliga a pausa no servidor (vira notificação).
+- Cooldown por regra+campanha (padrão 24 h) e limite diário por regra (padrão 3). Falhas também contam,
+  para não insistir na Meta a cada execução.
+- `min_spend`: sem evidência mínima de gasto, as métricas de custo/CTR/CPC não são avaliadas.
+- Agendador: `RULES_EVAL_INTERVAL_MINUTES` (padrão 60; `0` desliga). Rode **uma** instância do servidor,
+  senão o agendador (e a sincronização de insights) executa em duplicidade. `RULES_TIMEZONE` (padrão
+  `America/Sao_Paulo`) define o "dia" das janelas.
+
+### Testes com Postgres real
+
+```sh
+TEST_DATABASE_URL=postgresql://usuario@host:5432/banco_de_teste npm test
+```
+Sem `TEST_DATABASE_URL` os testes de banco são ignorados. Use um banco **descartável**: o teste cria
+tabelas-base se faltarem e apaga os dados das empresas de teste.

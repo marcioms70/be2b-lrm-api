@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { pool, query } from "./db.js";
 import { createAuthMiddleware, logAuthStartup } from "./auth.js";
+import { registerRulesRoutes, startRulesScheduler } from "./rulesRunner.js";
 import { MetaSyncError, registerMetaSyncRoutes, startInsightsAutoSync, syncMetaCampaignStatus } from "./metaSync.js";
 
 dotenv.config();
@@ -1062,6 +1063,7 @@ app.get("/api/bdr/whatsapp-instances", async (req, res) => {
    FALLBACK
 ========================================================= */
 registerMetaSyncRoutes(app);
+registerRulesRoutes(app);
 
 app.use((req, res) => {
   return fail(res, 404, "Endpoint não encontrado.");
@@ -1070,4 +1072,5 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Be2B LRM API rodando na porta ${PORT}`);
   startInsightsAutoSync();
+  startRulesScheduler();
 });
