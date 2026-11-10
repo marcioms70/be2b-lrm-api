@@ -64,7 +64,10 @@ export function buildWeeklyReport({ campaigns, metricRows, leadRows, ruleEvents 
 
   return {
     window, cur, prev,
-    deltas: { spend: delta(cur.spend, prev.spend), leads: delta(cur.leads, prev.leads), cpl: delta(cur.cpl, prev.cpl), qualified: delta(cur.qualified, prev.qualified), crm: delta(cur.crm, prev.crm) },
+    deltas: {
+      spend: delta(cur.spend, prev.spend), leads: delta(cur.leads, prev.leads), cpl: delta(cur.cpl, prev.cpl),
+      qualified: delta(cur.qualified, prev.qualified), cost_per_qualified: delta(cur.costPerQualified, prev.costPerQualified), crm: delta(cur.crm, prev.crm),
+    },
     campaigns: rows.slice(0, 8), hiddenCampaigns: Math.max(0, rows.length - 8),
     attention,
     ruleEvents: ruleEvents.filter((e) => inWin(e.created_day, window.cur)).slice(0, 8),
@@ -87,9 +90,9 @@ const int = (v) => (v === null || v === undefined ? "—" : Math.round(v).toLoca
 const pt = (d) => d.split("-").reverse().join("/");
 const short = (d) => d.split("-").reverse().slice(0, 2).join("/");
 
-const LOWER_IS_BETTER = new Set(["cpl"]);
+const LOWER_IS_BETTER = new Set(["cpl", "cost_per_qualified"]);
 function deltaCell(key, d) {
-  if (d === null) return "";
+  if (d === null || d === undefined || !Number.isFinite(d)) return ""; // sem base de comparação: não mostra nada (nunca "NaN%")
   const good = LOWER_IS_BETTER.has(key) ? d < 0 : d > 0;
   const neutral = key === "spend";
   const color = Math.abs(d) < 0.05 || neutral ? "#6b7280" : good ? "#15803d" : "#b91c1c";

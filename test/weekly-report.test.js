@@ -87,6 +87,34 @@ test("e-mail: valores em reais e variação com cores coerentes (CPL menor é bo
   assert.equal(subject, "Relatório semanal de tráfego pago — Be2B (02/11 a 08/11)");
 });
 
+test("e-mail nunca mostra NaN/undefined/Infinity, com qualquer combinação de dados", () => {
+  const cases = [
+    { metricRows: [], leadRows: [] },                                                         // semana vazia
+    { metricRows, leadRows },                                                                  // dados normais
+    { metricRows: [m("a", "2026-11-03", 100)], leadRows: [] },                                 // gasto sem leads, sem semana anterior
+    { metricRows: [], leadRows: [l("a", "2026-11-03", "qualificado")] },                       // leads sem gasto
+    { metricRows: [m("a", "2026-11-03", 0)], leadRows: [l("a", "2026-11-03")] },               // gasto zero
+  ];
+  for (const c of cases) {
+    const r = buildWeeklyReport({ campaigns, window: WIN, ...c });
+    const { html, text } = renderReportEmail(r, { orgName: "Be2B" });
+    for (const bad of ["NaN", "undefined", "Infinity", "null"]) {
+      assert.ok(!html.includes(bad), `html contém ${bad}`);
+      assert.ok(!text.includes(bad), `texto contém ${bad}`);
+    }
+  }
+});
+
+test("variação do custo por qualificado existe e menor é melhor (verde quando cai)", () => {
+  const prevRows = [m("a", "2026-10-28", 600)];
+  const prevLeads = [l("a", "2026-10-28", "qualificado"), l("a", "2026-10-29", "qualificado")];       // R$ 300 por qualificado antes
+  const curRows = [m("a", "2026-11-03", 400)];
+  const curLeads = [l("a", "2026-11-03", "qualificado"), l("a", "2026-11-04", "qualificado"), l("a", "2026-11-05", "qualificado"), l("a", "2026-11-06", "qualificado")]; // R$ 100 agora
+  const r = buildWeeklyReport({ campaigns, window: WIN, metricRows: [...prevRows, ...curRows], leadRows: [...prevLeads, ...curLeads] });
+  assert.ok(r.deltas.cost_per_qualified < 0);
+  assert.match(renderReportEmail(r).html, /color:#15803d[^>]*>▼ 66,7%/);
+});
+
 test("assunto sem quebra de linha (injeção de cabeçalho)", () => {
   assert.equal(cleanSubject("Olá\r\nBcc: alguem@x.com"), "Olá Bcc: alguem@x.com");
   assert.equal(cleanSubject("x".repeat(500)).length, 200);
