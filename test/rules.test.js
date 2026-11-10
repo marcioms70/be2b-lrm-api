@@ -91,6 +91,14 @@ test("gasto alto com ZERO leads: CPL é infinito (dispara '>' e não dispara '<'
   assert.equal(evaluateRule({ metric: "cpl", operator: ">", threshold: 50, min_spend: 0 }, snapWith({})).evaluable, false);
 });
 
+test("'leads <= 0' só dispara com gasto: campanha ativa sem investimento não é 'gasto sem leads'", () => {
+  const rule = { name: "Gasto sem leads", metric: "leads", operator: "<=", threshold: 0, min_spend: 50 };
+  assert.equal(evaluateRule(rule, snapWith({ spend: 0, leads: 0 })).evaluable, false);
+  assert.equal(evaluateRule(rule, snapWith({ spend: 20, leads: 0 })).evaluable, false);
+  assert.deepEqual(evaluateRule(rule, snapWith({ spend: 80, leads: 0 })), { evaluable: true, triggered: true, value: 0 });
+  assert.equal(evaluateRule(rule, snapWith({ spend: 80, leads: 3 })).triggered, false);
+});
+
 test("saldo baixo e dias sem leads não dependem de gasto mínimo", () => {
   assert.equal(evaluateRule({ metric: "balance", operator: "<", threshold: 100, min_spend: 500 }, snapWith({ balance: 80 })).triggered, true);
   assert.equal(evaluateRule({ metric: "balance", operator: "<", threshold: 100 }, snapWith({ balance: null })).evaluable, false);

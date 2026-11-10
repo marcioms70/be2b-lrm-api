@@ -331,6 +331,21 @@ test("regras: RULES_ALLOW_PAUSE=false transforma pausa em notificação", { skip
   assert.equal(await campaignStatus(), "ativa");
 });
 
+test("regras: 'leads <= 0' não dispara em campanha ativa SEM gasto, mas dispara com gasto e zero leads", { skip }, async () => {
+  await seedCampaign();
+  await mkRule({ name: "Gasto sem leads", metric: "leads", operator: "<=", threshold: 0, min_spend: 50, action: "pause" });
+  stubFetch(() => { throw new Error("não deveria chamar a Meta"); });
+
+  const none = await rules.runRulesForOrganization({ organizationId: ORG });       // sem nenhuma métrica
+  assert.equal(none.results.length, 0);
+  assert.equal(await campaignStatus(), "ativa");
+
+  await addMetric(dayOffset(1), 120);                                              // gastou R$ 120, zero leads
+  const real = await rules.runRulesForOrganization({ organizationId: ORG });
+  assert.equal(real.results[0].outcome, "paused");                                 // sem publicação na Meta: pausa local
+  assert.equal(await campaignStatus(), "pausada");
+});
+
 test("regras: dias sem leads e isolamento entre empresas", { skip }, async () => {
   await seedCampaign(CAMP, { start_date: dayOffset(10) });
   await addLeads(1, dayOffset(6));                                               // último lead há 6 dias

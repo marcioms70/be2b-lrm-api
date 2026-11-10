@@ -104,7 +104,9 @@ export function compareValue(value, operator, threshold) {
  */
 export function evaluateRule(rule, snap) {
   const minSpend = num(rule.min_spend);
-  const needsSpendEvidence = ["cpl", "cost_per_qualified", "ctr", "cpc"].includes(rule.metric);
+  // "leads" também exige evidência: "0 leads" só significa algo se houve gasto (senão a campanha
+  // recém-ativada, sem investimento, dispararia a regra — e uma regra de pausa a pararia).
+  const needsSpendEvidence = ["cpl", "cost_per_qualified", "ctr", "cpc", "leads"].includes(rule.metric);
 
   if (needsSpendEvidence && snap.spend < minSpend) {
     return { evaluable: false, triggered: false, value: null, reason: `gasto na janela (${snap.spend.toFixed(2)}) abaixo do mínimo (${minSpend})` };
