@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { query } from "./db.js";
 import { encryptToken, decryptToken } from "./tokenCrypto.js";
+import { buildAuthorizationUrl } from "./metaOauthUrl.js";
 
 const DEFAULT_SCOPES = [
   "ads_management",
@@ -326,12 +327,14 @@ async function handleOauthStart(req, res) {
       nonce: crypto.randomBytes(16).toString("hex")
     });
 
-    const url = new URL(`https://www.facebook.com/${graphVersion()}/dialog/oauth`);
-    url.searchParams.set("client_id", appId);
-    url.searchParams.set("redirect_uri", redirectUri);
-    url.searchParams.set("state", state);
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", getScopes().join(","));
+    const url = buildAuthorizationUrl({
+      version: graphVersion(),
+      appId,
+      redirectUri,
+      state,
+      scopes: getScopes(),
+      configId: process.env.META_CONFIG_ID
+    });
 
     if (wantsJson(req)) {
       return ok(res, { data: { authorization_url: url.toString(), redirect_url: url.toString() } });
