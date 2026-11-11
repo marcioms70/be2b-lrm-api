@@ -7,6 +7,7 @@ import { ensureSchema } from "./migrate.js";
 import { registerRulesRoutes, startRulesScheduler } from "./rulesRunner.js";
 import { registerReportRoutes, startReportScheduler } from "./reportRunner.js";
 import { MetaSyncError, registerMetaSyncRoutes, startInsightsAutoSync, syncMetaCampaignStatus } from "./metaSync.js";
+import { registerMetaReachRoutes } from "./metaReach.js";
 
 dotenv.config();
 
@@ -1098,6 +1099,7 @@ app.get("/api/bdr/whatsapp-instances", async (req, res) => {
    FALLBACK
 ========================================================= */
 registerMetaSyncRoutes(app);
+registerMetaReachRoutes(app);
 registerRulesRoutes(app);
 registerReportRoutes(app);
 

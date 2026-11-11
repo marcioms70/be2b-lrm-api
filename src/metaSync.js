@@ -38,7 +38,7 @@ async function markNeedsReconnect(organizationId, message) {
 }
 
 /** Traduz erros da Graph API para mensagens úteis e trata token expirado. */
-async function translateGraphError(err, organizationId) {
+export async function translateGraphError(err, organizationId) {
   if (!(err instanceof MetaGraphError)) return err;
   if (err.isTokenExpired) {
     await markNeedsReconnect(organizationId, err.message);
@@ -49,7 +49,7 @@ async function translateGraphError(err, organizationId) {
   return new MetaSyncError(`Erro da Meta: ${err.message}`, 502, { code: err.code, subcode: err.subcode });
 }
 
-async function tokenFor(organizationId) {
+export async function tokenFor(organizationId) {
   const connection = await getConnectedConnection(organizationId);
   if (!connection) throw new MetaSyncError("Conta Meta Ads não conectada (ou precisa ser reconectada).", 409);
   if (!connection.access_token_encrypted) throw new MetaSyncError("Conexão Meta sem token. Reconecte a conta.", 409);
