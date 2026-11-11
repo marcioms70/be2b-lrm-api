@@ -15,10 +15,18 @@ META_REDIRECT_URI=https://api.be2b.tech/api/meta-ads/oauth/callback
 META_GRAPH_API_VERSION=v21.0
 META_ENCRYPTION_KEY=
 META_SCOPES=ads_management,ads_read,business_management,pages_show_list,pages_read_engagement,instagram_basic
+META_CONFIG_ID=
 FRONTEND_URL=https://SEU_FRONTEND_LOVABLE
 ```
 
 `META_ENCRYPTION_KEY` é usada para criptografar tokens antes de salvar no PostgreSQL. Nenhum endpoint retorna access_token em texto puro.
+
+`META_CONFIG_ID` (opcional): se o app da Meta usa **Login do Facebook para Empresas**, a URL de login não aceita
+`scope`; as permissões vêm de uma *configuração* criada no painel (Login do Facebook para Empresas → Configurações).
+Com `META_CONFIG_ID` definido o login envia `config_id` e `override_default_response_type=true` (para receber `code`) e
+ignora `META_SCOPES`. Sem ele, vale o login clássico, como antes. Sintoma de falta do `config_id`: a Meta mostra
+"esse app precisa de pelo menos uma permissão compatível". O endereço de retorno
+(`META_REDIRECT_URI`) deve estar nos URIs de redirecionamento OAuth válidos do app.
 
 ### Tabelas criadas
 
