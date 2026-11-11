@@ -24,6 +24,8 @@ export class MetaGraphError extends Error {
 }
 
 export function graphBaseUrl(env = process.env) {
+  // META_GRAPH_BASE_URL (com a versão) existe para testes e proxies; em produção fica vazio.
+  if (env.META_GRAPH_BASE_URL) return String(env.META_GRAPH_BASE_URL).replace(/\/+$/, "");
   return `https://graph.facebook.com/${env.META_GRAPH_API_VERSION || "v21.0"}`;
 }
 

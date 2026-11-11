@@ -249,6 +249,27 @@ leads e regras automáticas disparadas. Dias com linha da Meta não somam o lan�
 - O envio agendado é reivindicado de forma atômica no banco (duas instâncias não duplicam), acontece uma vez por
   dia/agendamento e, se falhar, é repetido até 3 vezes no mesmo dia. O resultado fica em `last_status`/`last_error`.
 
+### Alcance estimado do público (`POST /api/meta-ads/reach-estimate`)
+
+Usado pelo assistente de campanha do be2bdr (passos Público e Localização) para mostrar quantas pessoas o público descrito
+alcança na Meta. **Só lê**: nada é criado na Meta. Requer a conta Meta conectada (usa o token e a conta de anúncios da empresa).
+
+Corpo: `{ "organization_id": "...", "targeting": { "country", "state", "city", "radius_km", "min_age", "max_age", "gender", "interests" } }`
+(`interests` em texto, separados por vírgula ou lista). A API traduz o texto para o que a Meta entende (busca a cidade e os
+interesses por nome) e consulta `reachestimate`; se a Meta recusar por motivo que não seja de acesso, tenta `delivery_estimate`.
+
+- Resposta: `data.lower` e `data.upper` (faixa de pessoas), `data.ready` (a Meta pode devolver "ainda calculando"), o que foi
+  resolvido (`resolved.city`, `resolved.interests`) e `unresolved_interests` (nomes que a Meta não reconheceu).
+- Cidade só é aceita com nome IGUAL (sem diferenciar acento/maiúsculas); no estado errado ou desconhecida → 422, em vez de
+  estimar a cidade errada. Raio de cidade é ajustado para 17–80 km (limite da Meta) e `radius_adjusted` avisa.
+- Cache de 10 min por público e limite de 20 consultas reais por minuto por empresa (429), para poupar a cota da Meta.
+- `META_GRAPH_BASE_URL` (opcional, com a versão, ex.: `http://127.0.0.1:9000/v21.0`) troca o endereço da Graph API; existe
+  para testes e proxies. Em produção deixe vazio.
+
+**Atenção:** a publicação automática de hoje (`metaAdsLivePublishPatch.js`, `buildTargeting`) envia à Meta só **país e idade**
+(sem cidade, interesses nem gênero), então a campanha publicada alcança um público mais amplo que o estimado aqui. A estimativa
+descreve o público do assistente, não o que a publicação atual envia.
+
 ### Automação de atendimento na campanha (`migrations/012_campaign_automation.sql`)
 
 `paid_traffic_campaigns.automation_id` (uuid, sem FK — a tabela `automations` vive no Supabase). O assistente do
