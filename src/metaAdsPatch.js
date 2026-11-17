@@ -6,6 +6,8 @@ import { fileURLToPath } from "url";
 import { query } from "./db.js";
 import { encryptToken, decryptToken } from "./tokenCrypto.js";
 import { buildAuthorizationUrl } from "./metaOauthUrl.js";
+import { createSelectionHandlers, normalizeOptions, pickDefaults } from "./metaSelection.js";
+import { isOrgAdmin } from "./auth.js";
 
 const DEFAULT_SCOPES = [
   "ads_management",
@@ -118,9 +120,9 @@ async function ensureMetaAdsTables() {
   if (tablesReady) return;
 
   const dirname = path.dirname(fileURLToPath(import.meta.url));
-  const migrationPath = path.resolve(dirname, "../migrations/007_meta_ads_integration.sql");
-  const sql = fs.readFileSync(migrationPath, "utf8");
-  await query(sql);
+  for (const file of ["007_meta_ads_integration.sql", "013_meta_ads_selection.sql"]) {
+    await query(fs.readFileSync(path.resolve(dirname, "../migrations", file), "utf8"));
+  }
   tablesReady = true;
 }
 
@@ -145,6 +147,7 @@ function sanitizeConnection(connection) {
     status: connection.status,
     last_error: connection.last_error,
     connected_at: connection.connected_at,
+    selection_confirmed: Boolean(connection.selection_confirmed_at),
     created_at: connection.created_at,
     updated_at: connection.updated_at,
     has_access_token: Boolean(connection.access_token_encrypted)
@@ -183,9 +186,10 @@ async function upsertConnection(organizationId, data) {
       status,
       last_error,
       connected_at,
+      selection_confirmed_at,
       updated_at
     ) values (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now()
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now()
     )
     on conflict (organization_id) do update set
       meta_user_id = excluded.meta_user_id,
@@ -204,6 +208,7 @@ async function upsertConnection(organizationId, data) {
       status = excluded.status,
       last_error = excluded.last_error,
       connected_at = coalesce(excluded.connected_at, public.meta_ads_connections.connected_at, now()),
+      selection_confirmed_at = excluded.selection_confirmed_at,
       updated_at = now()
     returning *
     `,
@@ -224,7 +229,8 @@ async function upsertConnection(organizationId, data) {
       data.scopes || null,
       data.status || "connected",
       data.last_error || null,
-      data.connected_at || new Date()
+      data.connected_at || new Date(),
+      data.selection_confirmed_at || null
     ]
   );
 
@@ -283,8 +289,50 @@ async function safeGraphGet(pathname, accessToken, params = {}) {
   }
 }
 
-function firstData(response) {
-  return Array.isArray(response?.data) ? response.data[0] : null;
+/** Segue a paginação da Graph (paging.next) até um limite, para não perder contas quando há muitas. */
+async function graphGetAll(pathname, accessToken, params = {}, maxPages = 5) {
+  const first = await graphGet(pathname, accessToken, { ...params, limit: 100 });
+  const all = Array.isArray(first?.data) ? [...first.data] : [];
+  let next = first?.paging?.next || null;
+  for (let page = 1; next && page < maxPages; page += 1) {
+    const response = await fetch(next);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body?.error?.message || `Erro Meta Graph API: HTTP ${response.status}`);
+    if (Array.isArray(body?.data)) all.push(...body.data);
+    next = body?.paging?.next || null;
+  }
+  return { data: all };
+}
+
+/**
+ * Empresas, contas de anúncios e Páginas que o TOKEN consegue enxergar. As contas de anúncios são obrigatórias (erro sobe);
+ * empresas e Páginas dependem de permissões que nem todo login pede, então falha vira lista vazia.
+ */
+async function loadMetaOptions(accessToken, { tolerant = false } = {}) {
+  const safe = async (pathname, params) => { try { return await graphGetAll(pathname, accessToken, params); } catch (error) { console.error(`Meta Graph ignorado em ${pathname}:`, error.message); return null; } };
+  const [businesses, adAccounts, pages] = await Promise.all([
+    safe("/me/businesses", { fields: "id,name" }),
+    tolerant ? safe("/me/adaccounts", { fields: "id,name,account_id,account_status,business{id,name}" }) : graphGetAll("/me/adaccounts", accessToken, { fields: "id,name,account_id,account_status,business{id,name}" }),
+    safe("/me/accounts", { fields: "id,name,instagram_business_account{id,username}" })
+  ]);
+  return { businesses, adAccounts, pages };
+}
+
+/** Grava a escolha confirmada (empresa, conta de anúncios, Página e Instagram) e marca como confirmada. Não mexe no token. */
+async function saveSelection(organizationId, data) {
+  await ensureMetaAdsTables();
+  const result = await query(
+    `
+    update public.meta_ads_connections
+    set business_id = $2, business_name = $3, ad_account_id = $4, ad_account_name = $5,
+        page_id = $6, page_name = $7, instagram_actor_id = $8, instagram_username = $9,
+        selection_confirmed_at = now(), last_error = null, updated_at = now()
+    where organization_id = $1
+    returning *
+    `,
+    [organizationId, data.business_id, data.business_name, data.ad_account_id, data.ad_account_name, data.page_id, data.page_name, data.instagram_actor_id, data.instagram_username]
+  );
+  return result.rows[0] || null;
 }
 
 function tokenExpiration(tokenResponse) {
@@ -383,20 +431,16 @@ async function handleOauthCallback(req, res) {
     if (!accessToken) throw new Error("A Meta não retornou access_token.");
 
     const me = await safeGraphGet("/me", accessToken, { fields: "id,name" });
-    const businesses = await safeGraphGet("/me/businesses", accessToken, { fields: "id,name", limit: 25 });
-    const adAccounts = await safeGraphGet("/me/adaccounts", accessToken, { fields: "id,name,account_id,account_status", limit: 25 });
-    const pages = await safeGraphGet("/me/accounts", accessToken, { fields: "id,name,instagram_business_account{id,username}", limit: 25 });
-
-    const business = firstData(businesses);
-    const adAccount = firstData(adAccounts);
-    const page = firstData(pages);
-    const instagram = page?.instagram_business_account || null;
+    // Sugestão inicial: a primeira conta ATIVA da primeira empresa (melhor que "o primeiro item da lista").
+    // A escolha só vale depois de confirmada pela tela (selection_confirmed_at fica vazio até lá).
+    const { business, adAccount, page } = pickDefaults(normalizeOptions(await loadMetaOptions(accessToken, { tolerant: true })));
+    const instagram = page?.instagram || null;
 
     const connection = await upsertConnection(state.organization_id, {
       meta_user_id: me?.id || null,
       business_id: business?.id || null,
       business_name: business?.name || null,
-      ad_account_id: adAccount?.id || (adAccount?.account_id ? `act_${adAccount.account_id}` : null),
+      ad_account_id: adAccount?.id || null,
       ad_account_name: adAccount?.name || null,
       page_id: page?.id || null,
       page_name: page?.name || null,
@@ -408,7 +452,8 @@ async function handleOauthCallback(req, res) {
       scopes: getScopes(),
       status: "connected",
       last_error: null,
-      connected_at: new Date()
+      connected_at: new Date(),
+      selection_confirmed_at: null
     });
 
     const redirectUrl = getFrontendRedirectUrl(true, { organization_id: state.organization_id });
@@ -448,7 +493,9 @@ async function handleManualConnect(req, res) {
       scopes: req.body.scopes || existing?.scopes || null,
       status: req.body.status || "connected",
       last_error: null,
-      connected_at: existing?.connected_at || new Date()
+      connected_at: existing?.connected_at || new Date(),
+      // quem informa a conta manualmente já escolheu: vale como confirmada; sem conta nova, mantém o que havia
+      selection_confirmed_at: req.body.ad_account_id ? new Date() : existing?.selection_confirmed_at || null
     });
 
     return ok(res, { data: { connection: sanitizeConnection(connection) } });
@@ -689,6 +736,12 @@ function registerMetaAdsRoutes(app) {
   app.get("/api/meta-ads/oauth/start", handleOauthStart);
   app.get("/api/meta-ads/oauth/callback", handleOauthCallback);
   app.post("/api/meta-ads/connect/manual", handleManualConnect);
+  const selection = createSelectionHandlers({
+    getOrganizationId, isOrgAdmin, getConnection, saveSelection, decryptToken, sanitizeConnection, ok, fail,
+    loadOptions: (token) => loadMetaOptions(token)
+  });
+  app.get("/api/meta-ads/connection/options", selection.handleOptions);
+  app.post("/api/meta-ads/connection/select", selection.handleSelect);
   app.post("/api/meta-ads/disconnect", handleDisconnect);
   app.post("/api/meta-ads/test-connection", handleTestConnection);
   app.post("/api/meta-ads/publish-campaign", handlePublishCampaign);
