@@ -71,6 +71,8 @@ test("rotas registradas pelos *Patch.js também exigem login", async () => {
     ["POST", "/api/media/upload"],
     ["POST", "/api/meta-ads/publish-campaign-live"],
     ["GET", "/api/meta-ads/status"],
+    ["GET", "/api/meta-ads/connection/options"],
+    ["POST", "/api/meta-ads/connection/select"],
     ["POST", "/api/creative/generate"],
     ["GET", "/api/creative/brand-kit"],
     ["POST", "/api/meta-ads/sync-insights"],
@@ -142,4 +144,13 @@ test("relatório semanal: membro comum NÃO configura destinatários (403); admi
   const r = await call("/api/paid-traffic/report-schedule", { method: "GET", ...admin });
   assert.notEqual(r.status, 403);   // passou da autorização (sem banco neste teste, falha depois com 500)
   assert.notEqual(r.status, 401);
+});
+
+test("escolha da conta Meta Ads: membro comum recebe 403 (só administrador); empresa de outro → 403", async () => {
+  const member = await call(`/api/meta-ads/connection/options?organization_id=${ORG}`, { headers: { authorization: "Bearer good", "x-organization-id": ORG } });
+  assert.equal(member.status, 403, `membro deveria receber 403 (veio ${member.status})`);
+  const other = await call("/api/meta-ads/connection/options", authed(OTHER));
+  assert.equal(other.status, 403);
+  const post = await call("/api/meta-ads/connection/select", { method: "POST", headers: { ...authed().headers, "content-type": "application/json" }, body: JSON.stringify({ ad_account_id: "act_123456" }) });
+  assert.equal(post.status, 403);
 });

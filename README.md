@@ -62,7 +62,28 @@ Redireciona para a Meta. Se chamado com `Accept: application/json` ou `?format=j
 GET /api/meta-ads/oauth/callback
 ```
 
-Recebe o `code`, valida `state`, troca por token, criptografa e salva a conexão.
+Recebe o `code`, valida `state`, troca por token, criptografa e salva a conexão. Escolhe um
+Business Manager e uma conta de anúncios padrão (a primeira conta **ativa** do primeiro Business),
+mas deixa a conexão como "não confirmada" (`selection_confirmed: false`) até o administrador escolher.
+
+#### Escolher Business Manager e conta de anúncios
+
+```http
+GET  /api/meta-ads/connection/options?organization_id=...
+POST /api/meta-ads/connection/select
+```
+
+Só administradores da empresa (403 para os demais). `options` lista, a partir do token já salvo,
+os Business Managers, as contas de anúncios (com `status_label`, `active` e o Business de cada uma)
+e as Páginas (com o Instagram vinculado). `select` recebe:
+
+```json
+{ "organization_id": "…", "ad_account_id": "act_123", "business_id": "456", "page_id": "789" }
+```
+
+A conta precisa estar na lista do token; o Business é sempre o da conta (divergência →
+`business_mismatch`); a Página é opcional. Grava a escolha e marca `selection_confirmed`.
+Nunca devolve o token. Requer a migração `013_meta_ads_selection.sql` (aplicada no start).
 
 #### Conexão manual para testes
 
