@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { query } from "./db.js";
 import { encryptToken, decryptToken } from "./tokenCrypto.js";
 import { buildAuthorizationUrl } from "./metaOauthUrl.js";
-import { createSelectionHandlers, normalizeOptions, pickDefaults } from "./metaSelection.js";
+import { createSelectionHandlers, normalizeOptions, pickDefaults, restrictToGranted } from "./metaSelection.js";
 import { isOrgAdmin } from "./auth.js";
 
 const DEFAULT_SCOPES = [
@@ -315,7 +315,14 @@ async function loadMetaOptions(accessToken, { tolerant = false } = {}) {
     tolerant ? safe("/me/adaccounts", { fields: "id,name,account_id,account_status,business{id,name}" }) : graphGetAll("/me/adaccounts", accessToken, { fields: "id,name,account_id,account_status,business{id,name}" }),
     safe("/me/accounts", { fields: "id,name,instagram_business_account{id,username}" })
   ]);
-  return { businesses, adAccounts, pages };
+  // Só o que a pessoa marcou na tela da Meta (granular_scopes). Se não der para verificar, não mostra nada (nunca "tudo").
+  let debugData = null;
+  try {
+    const appId = process.env.META_APP_ID; const appSecret = process.env.META_APP_SECRET;
+    if (appId && appSecret) debugData = (await graphGet("/debug_token", `${appId}|${appSecret}`, { input_token: accessToken }))?.data || null;
+  } catch (error) { console.error("Meta debug_token ignorado:", error.message); }
+  if (!debugData && !tolerant) throw new Error("Não foi possível verificar as permissões concedidas na Meta.");
+  return restrictToGranted({ businesses: businesses?.data, adAccounts: adAccounts?.data, pages: pages?.data }, debugData);
 }
 
 /** Grava a escolha confirmada (empresa, conta de anúncios, Página e Instagram) e marca como confirmada. Não mexe no token. */

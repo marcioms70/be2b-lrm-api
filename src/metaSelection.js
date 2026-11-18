@@ -30,6 +30,26 @@ export function normalizeAdAccountId(value) {
   return m ? `act_${m[1]}` : null;
 }
 
+/**
+ * Isolamento entre empresas: quem autoriza (ex.: a agência) pode enxergar contas de VÁRIOS clientes. Só vale o que a pessoa
+ * MARCOU na tela de permissões da Meta, que vem em `granular_scopes[].target_ids` do /debug_token.
+ *  - contas de anúncios: alvos de ads_management/ads_read; Páginas: alvos de qualquer permissão pages_*;
+ *  - sem alvo listado (ou sem granular_scopes) = nada: nunca "tudo que o usuário enxerga";
+ *  - as empresas são derivadas das contas permitidas (o Business dono de cada uma).
+ */
+export function restrictToGranted(raw, debugData) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const granular = Array.isArray(debugData?.granular_scopes) ? debugData.granular_scopes : [];
+  const targets = (match) => new Set(granular.filter((g) => match(String(g?.scope || ""))).flatMap((g) => list(g?.target_ids)).map((t) => String(t).replace(/^act_/, "")));
+  const adIds = targets((s) => s === "ads_management" || s === "ads_read");
+  const pageIds = targets((s) => s.startsWith("pages_"));
+  const adAccounts = list(input.adAccounts).filter((a) => adIds.has(String(a?.id ?? a?.account_id ?? "").replace(/^act_/, "")));
+  const businesses = [];
+  for (const a of adAccounts) if (a?.business?.id && !businesses.some((b) => b.id === a.business.id)) businesses.push({ id: a.business.id, name: a.business.name });
+  const pages = list(input.pages).filter((p) => pageIds.has(String(p?.id ?? "")));
+  return { businesses, adAccounts, pages };
+}
+
 /** Converte o que a Meta devolve (businesses, adaccounts, accounts) em listas simples, sem campos desconhecidos nem duplicados. */
 export function normalizeOptions(input) {
   const { businesses, adAccounts, pages } = input && typeof input === "object" ? input : {};

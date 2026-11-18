@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSelectionHandlers, normalizeAdAccountId, normalizeOptions, pickDefaults, validateSelection } from "../src/metaSelection.js";
+import { createSelectionHandlers, normalizeAdAccountId, normalizeOptions, pickDefaults, restrictToGranted, validateSelection } from "../src/metaSelection.js";
 
 const FEAX = { id: "1553288294853534", name: "Feax Informática" };
 const BE2B = { id: "1610491439097515", name: "Be2B Tecnologia" };
@@ -129,4 +129,46 @@ test("POST select: sem escolher Página, mantém a gravada só se ainda disponí
 test("erro inesperado vira 500 com mensagem fixa (o detalhe técnico não é a mensagem)", async () => {
   const { h } = harness(); const h2 = createSelectionHandlers({ getOrganizationId: () => "ORG", isOrgAdmin: () => true, getConnection: async () => { throw new Error("banco caiu"); }, ok: () => {}, fail: (res, status, message, details) => { res.status = status; res.body = { message, details }; return res; } });
   const res = mkRes(); await h2.handleSelect({ body: {} }, res); assert.equal(res.status, 500); assert.equal(res.body.message, "Não foi possível salvar a escolha."); void h;
+});
+
+// ---- isolamento entre empresas (só o que foi marcado na tela da Meta) --------------------------------------------------------------------
+const GRAW = {
+  adAccounts: { data: [
+    { id: "act_111111111", name: "Cliente A", account_status: 1, business: { id: "900", name: "BM A" } },
+    { id: "act_222222222", name: "Feax Ads", account_status: 1, business: { id: "1553288294853534", name: "Feax Informática" } },
+    { id: "act_333333333", name: "Pessoal", account_status: 1 }
+  ] },
+  businesses: { data: [{ id: "900", name: "BM A" }, { id: "1553288294853534", name: "Feax Informática" }] },
+  pages: { data: [{ id: "p-a", name: "Página A" }, { id: "p-feax", name: "Página Feax" }] }
+};
+const dbg = (...g) => ({ granular_scopes: g });
+
+test("restrictToGranted: só aparecem as contas marcadas na tela da Meta; as outras do mesmo usuário somem", () => {
+  const r = restrictToGranted(GRAW, dbg({ scope: "ads_management", target_ids: ["222222222"] }, { scope: "business_management", target_ids: ["900", "1553288294853534"] }));
+  assert.deepEqual(r.adAccounts.map((a) => a.id), ["act_222222222"]);
+  assert.deepEqual(r.businesses, [{ id: "1553288294853534", name: "Feax Informática" }]);   // BM A não aparece, mesmo marcado em business_management
+  assert.deepEqual(r.pages, []);
+  const n = normalizeOptions(r);
+  assert.equal(JSON.stringify(n).includes("Cliente A"), false);
+  assert.equal(JSON.stringify(n).includes("Pessoal"), false);
+});
+
+test("restrictToGranted: ads_read também vale; target_ids com prefixo act_ funcionam; Páginas só as de pages_*", () => {
+  const r = restrictToGranted(GRAW, dbg({ scope: "ads_read", target_ids: ["act_111111111"] }, { scope: "pages_show_list", target_ids: ["p-feax"] }));
+  assert.deepEqual(r.adAccounts.map((a) => a.id), ["act_111111111"]);
+  assert.deepEqual(r.pages.map((p) => p.id), ["p-feax"]);
+});
+
+test("restrictToGranted: sem granular_scopes, sem alvos ou sem debug_token = nada (nunca 'tudo que o usuário enxerga')", () => {
+  for (const d of [null, undefined, {}, { granular_scopes: [] }, dbg({ scope: "ads_management" }), dbg({ scope: "ads_management", target_ids: [] }), dbg({ scope: "email", target_ids: ["222222222"] })]) {
+    const r = restrictToGranted(GRAW, d);
+    assert.deepEqual([r.adAccounts, r.businesses, r.pages], [[], [], []]);
+  }
+  assert.deepEqual(restrictToGranted(null, dbg({ scope: "ads_management", target_ids: ["1"] })), { businesses: [], adAccounts: [], pages: [] });
+});
+
+test("restrictToGranted + validateSelection: conta que não foi marcada é recusada, mesmo existindo no usuário", () => {
+  const o = normalizeOptions(restrictToGranted(GRAW, dbg({ scope: "ads_management", target_ids: ["222222222"] })));
+  assert.equal(validateSelection(o, { ad_account_id: "act_111111111" }).code, "ad_account_not_available");
+  assert.equal(validateSelection(o, { ad_account_id: "act_222222222" }).ok, true);
 });
