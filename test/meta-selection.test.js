@@ -70,11 +70,12 @@ test("validateSelection: a Página é opcional, mas se vier precisa estar na lis
 // ---- rotas (dependências falsas) ---------------------------------------------------------------------------------------------------------
 const mkRes = () => { const r = { status: 200, body: null, code(c) { this.status = c; return this; } }; return r; };
 function harness(o = {}) {
-  const calls = { saved: [], loaded: [] }; let conn = o.connection === undefined ? { organization_id: "ORG", access_token_encrypted: "enc", page_id: null, business_id: BE2B.id, ad_account_id: "act_111111111", selection_confirmed_at: null } : o.connection;
+  const calls = { saved: [], loaded: [], cleared: [] }; let conn = o.connection === undefined ? { organization_id: "ORG", access_token_encrypted: "enc", page_id: null, business_id: BE2B.id, ad_account_id: "act_111111111", selection_confirmed_at: null } : o.connection;
   const h = createSelectionHandlers({
     getOrganizationId: (req) => req.org ?? "ORG", isOrgAdmin: (req) => req.admin !== false, getConnection: async () => conn,
     decryptToken: (e) => { assert.equal(e, "enc"); return "TOKEN-SECRETO"; },
     loadOptions: async (t) => { calls.loaded.push(t); if (o.loadThrows) throw new Error(`Graph recusou ${t}`); return o.raw || raw; },
+    clearSelection: async (org) => { calls.cleared.push(org); conn = { ...conn, business_id: null, business_name: null, ad_account_id: null, ad_account_name: null, page_id: null, page_name: null, selection_confirmed_at: null }; return conn; },
     saveSelection: async (org, data) => { calls.saved.push([org, data]); conn = { ...conn, ...data, selection_confirmed_at: new Date() }; return conn; },
     sanitizeConnection: (c) => ({ business_id: c.business_id, ad_account_id: c.ad_account_id, page_id: c.page_id, selection_confirmed: Boolean(c.selection_confirmed_at), has_access_token: true }),
     ok: (res, b) => { res.body = { success: true, ...b }; return res; }, fail: (res, status, message, details) => { res.status = status; res.body = { success: false, message, details }; return res; }
@@ -171,4 +172,18 @@ test("restrictToGranted + validateSelection: conta que não foi marcada é recus
   const o = normalizeOptions(restrictToGranted(GRAW, dbg({ scope: "ads_management", target_ids: ["222222222"] })));
   assert.equal(validateSelection(o, { ad_account_id: "act_111111111" }).code, "ad_account_not_available");
   assert.equal(validateSelection(o, { ad_account_id: "act_222222222" }).ok, true);
+});
+
+test("options: conta gravada que NÃO está entre as autorizadas é removida (nada de Be2B/outro cliente 'conectado')", async () => {
+  const stale = { organization_id: "ORG", access_token_encrypted: "enc", business_id: BE2B.id, business_name: "Be2B Tecnologia", ad_account_id: "act_3639337402278", ad_account_name: "Marcio Mendes", page_id: "P", selection_confirmed_at: null };
+  const { h, calls } = harness({ connection: stale, raw: { businesses: [], adAccounts: [], pages: [] } }); const res = mkRes(); await h.handleOptions({}, res);
+  assert.equal(res.status, 200); assert.deepEqual(calls.cleared, ["ORG"]);
+  assert.equal(res.body.data.cleared, true); assert.equal(res.body.data.current.ad_account_id, null); assert.equal(res.body.data.current.business_name, null); assert.equal(res.body.data.current.page_id, null);
+});
+
+test("options: conta gravada que continua autorizada NÃO é mexida; falha ao consultar a Meta NÃO apaga nada", async () => {
+  let { h, calls } = harness(); let res = mkRes(); await h.handleOptions({}, res);
+  assert.deepEqual(calls.cleared, []); assert.equal(res.body.data.cleared, false);
+  ({ h, calls } = harness({ loadThrows: true })); res = mkRes(); await h.handleOptions({}, res);
+  assert.equal(res.status, 502); assert.deepEqual(calls.cleared, []);
 });

@@ -118,7 +118,7 @@ export function validateSelection(opts, body = {}) {
  * Só administradores da empresa. O token nunca sai daqui: a resposta traz só IDs e nomes.
  */
 export function createSelectionHandlers(deps) {
-  const { getOrganizationId, isOrgAdmin, getConnection, saveSelection, decryptToken, loadOptions, sanitizeConnection, ok, fail } = deps;
+  const { getOrganizationId, isOrgAdmin, getConnection, saveSelection, clearSelection, decryptToken, loadOptions, sanitizeConnection, ok, fail } = deps;
 
   async function prepare(req, res) {
     const organizationId = getOrganizationId(req);
@@ -136,9 +136,17 @@ export function createSelectionHandlers(deps) {
   async function handleOptions(req, res) {
     try {
       const ctx = await prepare(req, res); if (!ctx) return;
-      const c = ctx.connection;
+      let c = ctx.connection;
+      // Conta gravada que NÃO está entre as autorizadas (ex.: escolha automática antiga, de outro cliente): remove. Só chega aqui se a Meta respondeu.
+      let cleared = false;
+      const stored = normalizeAdAccountId(c.ad_account_id);
+      if (stored && clearSelection && !ctx.opts.ad_accounts.some((a) => a.id === stored)) {
+        c = (await clearSelection(ctx.organizationId)) || { ...c, business_id: null, business_name: null, ad_account_id: null, ad_account_name: null, page_id: null, page_name: null, selection_confirmed_at: null };
+        cleared = true;
+      }
       return ok(res, {
         data: {
+          cleared,
           selection_confirmed: Boolean(c.selection_confirmed_at),
           current: { business_id: c.business_id, business_name: c.business_name, ad_account_id: c.ad_account_id, ad_account_name: c.ad_account_name, page_id: c.page_id, page_name: c.page_name },
           ...ctx.opts

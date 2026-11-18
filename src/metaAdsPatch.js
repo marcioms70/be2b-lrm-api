@@ -342,6 +342,23 @@ async function saveSelection(organizationId, data) {
   return result.rows[0] || null;
 }
 
+/** Remove a escolha gravada (empresa, conta de anúncios, Página, Instagram) e volta a "não confirmada". Não mexe no token. */
+async function clearSelection(organizationId) {
+  await ensureMetaAdsTables();
+  const result = await query(
+    `
+    update public.meta_ads_connections
+    set business_id = null, business_name = null, ad_account_id = null, ad_account_name = null,
+        page_id = null, page_name = null, instagram_actor_id = null, instagram_username = null,
+        selection_confirmed_at = null, updated_at = now()
+    where organization_id = $1
+    returning *
+    `,
+    [organizationId]
+  );
+  return result.rows[0] || null;
+}
+
 function tokenExpiration(tokenResponse) {
   if (!tokenResponse?.expires_in) return null;
   return new Date(Date.now() + Number(tokenResponse.expires_in) * 1000);
@@ -744,7 +761,7 @@ function registerMetaAdsRoutes(app) {
   app.get("/api/meta-ads/oauth/callback", handleOauthCallback);
   app.post("/api/meta-ads/connect/manual", handleManualConnect);
   const selection = createSelectionHandlers({
-    getOrganizationId, isOrgAdmin, getConnection, saveSelection, decryptToken, sanitizeConnection, ok, fail,
+    getOrganizationId, isOrgAdmin, getConnection, saveSelection, clearSelection, decryptToken, sanitizeConnection, ok, fail,
     loadOptions: (token) => loadMetaOptions(token)
   });
   app.get("/api/meta-ads/connection/options", selection.handleOptions);
