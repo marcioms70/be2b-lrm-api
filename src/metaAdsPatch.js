@@ -528,12 +528,36 @@ async function handleManualConnect(req, res) {
   }
 }
 
+/**
+ * Desconectar de verdade: apaga o token e a escolha gravada (empresa, conta de anúncios, Página, Instagram).
+ * Antes só o status mudava e a conta antiga continuava aparecendo (e com token guardado). A linha fica, para o histórico das campanhas.
+ */
+export async function disconnectConnection(organizationId) {
+  await ensureMetaAdsTables();
+  const result = await query(
+    `
+    update public.meta_ads_connections
+    set status = 'disconnected', last_error = null,
+        access_token_encrypted = null, token_type = null, token_expires_at = null, scopes = null,
+        meta_user_id = null,
+        business_id = null, business_name = null, ad_account_id = null, ad_account_name = null,
+        page_id = null, page_name = null, instagram_actor_id = null, instagram_username = null,
+        selection_confirmed_at = null, connected_at = null, updated_at = now()
+    where organization_id = $1
+    returning *
+    `,
+    [organizationId]
+  );
+  return result.rows[0] || null;
+}
+
 async function handleDisconnect(req, res) {
   try {
     const organizationId = getOrganizationId(req);
     if (!organizationId) return fail(res, 400, "organization_id é obrigatório.");
+    if (!isOrgAdmin(req)) return fail(res, 403, "Apenas administradores da empresa desconectam o Meta Ads.");
 
-    const connection = await updateConnectionStatus(organizationId, "disconnected", null);
+    const connection = await disconnectConnection(organizationId);
     return ok(res, { data: { connection: sanitizeConnection(connection), disconnected: true } });
   } catch (error) {
     return fail(res, 500, "Não foi possível desconectar Meta Ads.", error.message);
