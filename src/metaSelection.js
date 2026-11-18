@@ -33,17 +33,21 @@ export function normalizeAdAccountId(value) {
 /**
  * Isolamento entre empresas: quem autoriza (ex.: a agência) pode enxergar contas de VÁRIOS clientes. Só vale o que a pessoa
  * MARCOU na tela de permissões da Meta, que vem em `granular_scopes[].target_ids` do /debug_token.
- *  - contas de anúncios: alvos de ads_management/ads_read; Páginas: alvos de qualquer permissão pages_*;
+ *  - Business: alvos de business_management. A tela da Meta nem sempre deixa marcar contas de anúncios uma a uma ("gerencie anúncios das
+ *    contas às quais você tem acesso"); então uma conta de anúncios vale se estiver nos alvos de ads_management/ads_read OU se o Business
+ *    DONO dela estiver marcado. Conta pessoal (sem Business) só vale se marcada como alvo de ads_*;
+ *  - Páginas: alvos de qualquer permissão pages_*;
  *  - sem alvo listado (ou sem granular_scopes) = nada: nunca "tudo que o usuário enxerga";
- *  - as empresas são derivadas das contas permitidas (o Business dono de cada uma).
+ *  - as empresas listadas são as donas das contas permitidas.
  */
 export function restrictToGranted(raw, debugData) {
   const input = raw && typeof raw === "object" ? raw : {};
   const granular = Array.isArray(debugData?.granular_scopes) ? debugData.granular_scopes : [];
   const targets = (match) => new Set(granular.filter((g) => match(String(g?.scope || ""))).flatMap((g) => list(g?.target_ids)).map((t) => String(t).replace(/^act_/, "")));
   const adIds = targets((s) => s === "ads_management" || s === "ads_read");
+  const bizIds = targets((s) => s === "business_management");
   const pageIds = targets((s) => s.startsWith("pages_"));
-  const adAccounts = list(input.adAccounts).filter((a) => adIds.has(String(a?.id ?? a?.account_id ?? "").replace(/^act_/, "")));
+  const adAccounts = list(input.adAccounts).filter((a) => adIds.has(String(a?.id ?? a?.account_id ?? "").replace(/^act_/, "")) || (a?.business?.id && bizIds.has(String(a.business.id))));
   const businesses = [];
   for (const a of adAccounts) if (a?.business?.id && !businesses.some((b) => b.id === a.business.id)) businesses.push({ id: a.business.id, name: a.business.name });
   const pages = list(input.pages).filter((p) => pageIds.has(String(p?.id ?? "")));

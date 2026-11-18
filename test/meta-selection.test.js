@@ -144,14 +144,21 @@ const GRAW = {
 };
 const dbg = (...g) => ({ granular_scopes: g });
 
-test("restrictToGranted: só aparecem as contas marcadas na tela da Meta; as outras do mesmo usuário somem", () => {
-  const r = restrictToGranted(GRAW, dbg({ scope: "ads_management", target_ids: ["222222222"] }, { scope: "business_management", target_ids: ["900", "1553288294853534"] }));
+test("restrictToGranted: caso real da Meta (só o Business marcado, sem contas uma a uma): entram as contas desse Business; as dos outros e a pessoal somem", () => {
+  const r = restrictToGranted(GRAW, dbg({ scope: "business_management", target_ids: ["1553288294853534"] }));
   assert.deepEqual(r.adAccounts.map((a) => a.id), ["act_222222222"]);
-  assert.deepEqual(r.businesses, [{ id: "1553288294853534", name: "Feax Informática" }]);   // BM A não aparece, mesmo marcado em business_management
+  assert.deepEqual(r.businesses, [{ id: "1553288294853534", name: "Feax Informática" }]);
   assert.deepEqual(r.pages, []);
   const n = normalizeOptions(r);
   assert.equal(JSON.stringify(n).includes("Cliente A"), false);
   assert.equal(JSON.stringify(n).includes("Pessoal"), false);
+});
+
+test("restrictToGranted: conta marcada uma a uma continua valendo (inclusive pessoal), somada às do Business marcado", () => {
+  const r = restrictToGranted(GRAW, dbg({ scope: "ads_management", target_ids: ["333333333"] }, { scope: "business_management", target_ids: ["1553288294853534"] }));
+  assert.deepEqual(r.adAccounts.map((a) => a.id).sort(), ["act_222222222", "act_333333333"]);
+  const two = restrictToGranted(GRAW, dbg({ scope: "business_management", target_ids: ["900", "1553288294853534"] }));
+  assert.deepEqual(two.adAccounts.map((a) => a.id).sort(), ["act_111111111", "act_222222222"]);   // dois Businesses marcados = as contas dos dois
 });
 
 test("restrictToGranted: ads_read também vale; target_ids com prefixo act_ funcionam; Páginas só as de pages_*", () => {
@@ -161,7 +168,7 @@ test("restrictToGranted: ads_read também vale; target_ids com prefixo act_ func
 });
 
 test("restrictToGranted: sem granular_scopes, sem alvos ou sem debug_token = nada (nunca 'tudo que o usuário enxerga')", () => {
-  for (const d of [null, undefined, {}, { granular_scopes: [] }, dbg({ scope: "ads_management" }), dbg({ scope: "ads_management", target_ids: [] }), dbg({ scope: "email", target_ids: ["222222222"] })]) {
+  for (const d of [null, undefined, {}, { granular_scopes: [] }, dbg({ scope: "ads_management" }), dbg({ scope: "ads_management", target_ids: [] }), dbg({ scope: "business_management" }), dbg({ scope: "business_management", target_ids: [] }), dbg({ scope: "business_management", target_ids: ["nao-existe"] }), dbg({ scope: "email", target_ids: ["222222222"] })]) {
     const r = restrictToGranted(GRAW, d);
     assert.deepEqual([r.adAccounts, r.businesses, r.pages], [[], [], []]);
   }
@@ -169,7 +176,7 @@ test("restrictToGranted: sem granular_scopes, sem alvos ou sem debug_token = nad
 });
 
 test("restrictToGranted + validateSelection: conta que não foi marcada é recusada, mesmo existindo no usuário", () => {
-  const o = normalizeOptions(restrictToGranted(GRAW, dbg({ scope: "ads_management", target_ids: ["222222222"] })));
+  const o = normalizeOptions(restrictToGranted(GRAW, dbg({ scope: "business_management", target_ids: ["1553288294853534"] })));
   assert.equal(validateSelection(o, { ad_account_id: "act_111111111" }).code, "ad_account_not_available");
   assert.equal(validateSelection(o, { ad_account_id: "act_222222222" }).ok, true);
 });
