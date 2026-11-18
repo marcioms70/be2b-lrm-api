@@ -48,3 +48,18 @@ test("desconectar uma empresa NÃO mexe nas outras", { skip }, async () => {
 test("desconectar empresa sem conexão devolve null (sem erro)", { skip }, async () => {
   assert.equal(await disconnectConnection("cccccccc-cccc-4ccc-8ccc-cccccccccccc"), null);
 });
+
+test("migração 014: limpa conexões JÁ desconectadas (token e conta antigos) e não mexe nas conectadas nem nas já limpas", { skip }, async () => {
+  const OLD = "dddddddd-dddd-4ddd-8ddd-ddddddddddd1";
+  await query(`delete from public.meta_ads_connections where organization_id in ($1,$2)`, [OLD, ORG]);
+  await seed(OLD); await query(`update public.meta_ads_connections set status = 'disconnected' where organization_id = $1`, [OLD]);   // como o botão antigo deixava
+  await seed(ORG);                                                                                                                 // conectada: não pode ser tocada
+  const sql = readFileSync(new URL("../migrations/014_meta_ads_purge_disconnected.sql", import.meta.url), "utf8");
+  await query(sql); await query(sql);   // idempotente
+  const old = (await query(`select * from public.meta_ads_connections where organization_id = $1`, [OLD])).rows[0];
+  assert.equal(old.status, "disconnected");
+  for (const k of ["access_token_encrypted", "business_id", "business_name", "ad_account_id", "ad_account_name", "page_id", "instagram_actor_id", "meta_user_id", "connected_at", "token_expires_at", "scopes"]) assert.equal(old[k], null, k);
+  const live = (await query(`select * from public.meta_ads_connections where organization_id = $1`, [ORG])).rows[0];
+  assert.equal(live.status, "connected"); assert.equal(live.ad_account_id, "act_3639337402278"); assert.equal(live.access_token_encrypted, "TOKEN-CIFRADO");
+  await query(`delete from public.meta_ads_connections where organization_id = $1`, [OLD]);
+});
