@@ -74,8 +74,9 @@ POST /api/meta-ads/connection/select
 ```
 
 **Isolamento entre empresas:** as opções mostram SÓ o que a pessoa marcou na tela de permissões da Meta
-(`granular_scopes[].target_ids` do `/debug_token`; requer `META_APP_ID` e `META_APP_SECRET`). Contas de outros clientes
-do mesmo usuário não aparecem e não podem ser escolhidas. Se não der para verificar, a lista vem vazia (nunca "tudo").
+(`granular_scopes[].target_ids` do `/debug_token`; requer `META_APP_ID` e `META_APP_SECRET`). Uma conta de anúncios vale se
+foi marcada uma a uma OU se o Business dono dela foi marcado (a tela da Meta nem sempre deixa marcar contas individualmente).
+Contas de outros clientes do mesmo usuário não aparecem e não podem ser escolhidas. Se não der para verificar, a lista vem vazia (nunca "tudo").
 Só administradores da empresa (403 para os demais). `options` lista, a partir do token já salvo,
 os Business Managers, as contas de anúncios (com `status_label`, `active` e o Business de cada uma)
 e as Páginas (com o Instagram vinculado). `select` recebe:
