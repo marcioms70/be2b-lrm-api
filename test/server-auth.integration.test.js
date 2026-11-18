@@ -154,3 +154,8 @@ test("escolha da conta Meta Ads: membro comum recebe 403 (só administrador); em
   const post = await call("/api/meta-ads/connection/select", { method: "POST", headers: { ...authed().headers, "content-type": "application/json" }, body: JSON.stringify({ ad_account_id: "act_123456" }) });
   assert.equal(post.status, 403);
 });
+
+test("desconectar o Meta Ads: membro comum recebe 403 (só administrador)", async () => {
+  const r = await call("/api/meta-ads/disconnect", { method: "POST", headers: { ...authed().headers, "content-type": "application/json" }, body: JSON.stringify({ organization_id: ORG }) });
+  assert.equal(r.status, 403);
+});
