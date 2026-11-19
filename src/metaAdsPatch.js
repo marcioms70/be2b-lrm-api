@@ -7,6 +7,7 @@ import { query } from "./db.js";
 import { encryptToken, decryptToken } from "./tokenCrypto.js";
 import { buildAuthorizationUrl } from "./metaOauthUrl.js";
 import { createSelectionHandlers, normalizeOptions, pickDefaults, restrictToGranted } from "./metaSelection.js";
+import { BILLING_FIELDS, createBillingHandler } from "./metaBilling.js";
 import { isOrgAdmin } from "./auth.js";
 
 const DEFAULT_SCOPES = [
@@ -788,6 +789,11 @@ function registerMetaAdsRoutes(app) {
     getOrganizationId, isOrgAdmin, getConnection, saveSelection, clearSelection, decryptToken, sanitizeConnection, ok, fail,
     loadOptions: (token) => loadMetaOptions(token)
   });
+  const billing = createBillingHandler({
+    getOrganizationId, getConnection, decryptToken, ok, fail,
+    loadAccount: (token, adAccountId) => graphGet(`/${adAccountId}`, token, { fields: BILLING_FIELDS })
+  });
+  app.get("/api/meta-ads/connection/billing", billing.handle);
   app.get("/api/meta-ads/connection/options", selection.handleOptions);
   app.post("/api/meta-ads/connection/select", selection.handleSelect);
   app.post("/api/meta-ads/disconnect", handleDisconnect);

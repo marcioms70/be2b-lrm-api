@@ -113,6 +113,16 @@ Body exemplo:
 
 Pode receber `access_token`, mas ele será criptografado e nunca retornado.
 
+#### Situação do pagamento da conta de anúncios
+
+```http
+GET /api/meta-ads/connection/billing?organization_id=...
+```
+
+Somente leitura, para qualquer membro da empresa. Consulta a conta de anúncios escolhida e devolve `has_funding_source` (já existe forma de pagamento?),
+`funding_label` (o texto que a própria Meta mostra, ex.: "Visa *4242"), `account_status`/`account_status_label`/`account_active` e `currency`.
+A Meta não permite cadastrar forma de pagamento por API: o cliente cadastra na tela de cobrança da Meta. Não lê saldo nem gasto e nunca devolve o token.
+
 #### Desconectar
 
 ```http

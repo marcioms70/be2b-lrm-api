@@ -72,6 +72,7 @@ test("rotas registradas pelos *Patch.js também exigem login", async () => {
     ["POST", "/api/meta-ads/publish-campaign-live"],
     ["GET", "/api/meta-ads/status"],
     ["GET", "/api/meta-ads/connection/options"],
+    ["GET", "/api/meta-ads/connection/billing"],
     ["POST", "/api/meta-ads/connection/select"],
     ["POST", "/api/creative/generate"],
     ["GET", "/api/creative/brand-kit"],
